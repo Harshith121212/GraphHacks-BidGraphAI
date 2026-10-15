@@ -1,0 +1,12 @@
+[
+  {"id":"R01","reference_value":500000,"gst_required":true,"pan_required":true,"epfo_required":false,"esic_required":false,"udyam_required":true,"msme_preference":true},
+  {"id":"R02","reference_value":2500000,"gst_required":true,"pan_required":true,"epfo_required":true,"esic_required":false,"udyam_required":false,"msme_preference":false},
+  {"id":"R03","reference_value":10000000,"gst_required":true,"pan_required":true,"epfo_required":true,"esic_required":true,"udyam_required":false,"msme_preference":false},
+  {"id":"R04","reference_value":40000000,"gst_required":true,"pan_required":true,"epfo_required":false,"esic_required":true,"udyam_required":true,"msme_preference":true},
+  {"id":"R05","reference_value":120000000,"gst_required":true,"pan_required":true,"epfo_required":true,"esic_required":true,"udyam_required":true,"msme_preference":true},
+  {"id":"R06","reference_value":350000000,"gst_required":true,"pan_required":true,"epfo_required":true,"esic_required":false,"udyam_required":false,"msme_preference":true},
+  {"id":"R07","reference_value":900000000,"gst_required":true,"pan_required":true,"epfo_required":false,"esic_required":true,"udyam_required":false,"msme_preference":false},
+  {"id":"R08","reference_value":2500000000,"gst_required":true,"pan_required":true,"epfo_required":false,"esic_required":false,"udyam_required":false,"msme_preference":false},
+  {"id":"R09","reference_value":7000000000,"gst_required":true,"pan_required":true,"epfo_required":true,"esic_required":true,"udyam_required":true,"msme_preference":false},
+  {"id":"R10","reference_value":18000000000,"gst_required":true,"pan_required":true,"epfo_required":true,"esic_required":true,"udyam_required":false,"msme_preference":true}
+]

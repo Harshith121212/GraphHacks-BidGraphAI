@@ -1,0 +1,12 @@
+[
+  {"id":"T01","reference_value":500000,"sample_ratios":[0.72,0.84,0.95],"years_considered":3},
+  {"id":"T02","reference_value":2500000,"sample_ratios":[0.88,0.96,1.08],"years_considered":3},
+  {"id":"T03","reference_value":10000000,"sample_ratios":[0.91,1.03,1.14],"years_considered":3},
+  {"id":"T04","reference_value":40000000,"sample_ratios":[0.82,1.02,1.19],"years_considered":3},
+  {"id":"T05","reference_value":120000000,"sample_ratios":[0.77,0.99,1.21],"years_considered":3},
+  {"id":"T06","reference_value":350000000,"sample_ratios":[0.89,1.05,1.26],"years_considered":3},
+  {"id":"T07","reference_value":900000000,"sample_ratios":[0.80,1.01,1.17],"years_considered":3},
+  {"id":"T08","reference_value":2500000000,"sample_ratios":[0.93,1.10,1.28],"years_considered":3},
+  {"id":"T09","reference_value":7000000000,"sample_ratios":[0.85,1.04,1.23],"years_considered":3},
+  {"id":"T10","reference_value":18000000000,"sample_ratios":[0.75,1.00,1.30],"years_considered":3}
+]

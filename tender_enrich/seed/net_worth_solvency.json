@@ -1,0 +1,12 @@
+[
+  {"id":"N01","reference_value":400000,"net_worth_ratio":0.20,"positive_required":true,"solvency_required":false,"solvency_ratio":0.40,"bank_type":"scheduled commercial bank","validity_months":3},
+  {"id":"N02","reference_value":2000000,"net_worth_ratio":0.25,"positive_required":true,"solvency_required":true,"solvency_ratio":0.40,"bank_type":"scheduled commercial bank","validity_months":6},
+  {"id":"N03","reference_value":8000000,"net_worth_ratio":0.30,"positive_required":true,"solvency_required":false,"solvency_ratio":0.40,"bank_type":"nationalized bank","validity_months":6},
+  {"id":"N04","reference_value":30000000,"net_worth_ratio":0.35,"positive_required":true,"solvency_required":true,"solvency_ratio":0.40,"bank_type":"scheduled commercial bank","validity_months":12},
+  {"id":"N05","reference_value":100000000,"net_worth_ratio":0.40,"positive_required":true,"solvency_required":true,"solvency_ratio":0.40,"bank_type":"public sector bank","validity_months":12},
+  {"id":"N06","reference_value":300000000,"net_worth_ratio":0.22,"positive_required":false,"solvency_required":false,"solvency_ratio":0.40,"bank_type":"scheduled commercial bank","validity_months":3},
+  {"id":"N07","reference_value":800000000,"net_worth_ratio":0.28,"positive_required":true,"solvency_required":true,"solvency_ratio":0.40,"bank_type":"nationalized bank","validity_months":9},
+  {"id":"N08","reference_value":2200000000,"net_worth_ratio":0.33,"positive_required":true,"solvency_required":false,"solvency_ratio":0.40,"bank_type":"scheduled commercial bank","validity_months":6},
+  {"id":"N09","reference_value":6500000000,"net_worth_ratio":0.38,"positive_required":true,"solvency_required":true,"solvency_ratio":0.40,"bank_type":"public sector bank","validity_months":12},
+  {"id":"N10","reference_value":16000000000,"net_worth_ratio":0.24,"positive_required":false,"solvency_required":true,"solvency_ratio":0.40,"bank_type":"scheduled commercial bank","validity_months":18}
+]
