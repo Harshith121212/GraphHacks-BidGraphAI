@@ -120,18 +120,7 @@ class CPPPScraper(BaseScraper):
         super().__init__(**kwargs)
 
     def scrape(self):
-        # The dedicated active listing currently requires a CAPTCHA. Never submit
-        # its form; use the small public latest-tenders HTML table as a fallback.
-        active = self.fetch(ACTIVE_URL)
-        if active is not None:
-            active_path = self.save_payload(active.content)
-            active_soup = BeautifulSoup(active.text, "html.parser")
-            visible = " ".join(active_soup.stripped_strings).lower()
-            if "enter captcha" in visible or "provide captcha" in visible:
-                LOG.warning("blocked: CPPP active listing requires CAPTCHA; skipping it")
-            else:
-                LOG.info("CPPP active listing returned; parser currently uses public landing-page table")
-
+        # Dedicated active listing requires a CAPTCHA; use the public latest-tenders HTML table on landing page
         response = self.fetch(HOME_URL)
         if response is None:
             return

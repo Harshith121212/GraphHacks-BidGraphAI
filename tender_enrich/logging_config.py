@@ -28,7 +28,7 @@ class OneLineFormatter(logging.Formatter):
 
 
 def configure_logging(level: str, log_format: str) -> None:
-    handler = logging.StreamHandler(sys.stdout)
+    handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(OneLineFormatter(log_format.lower() == "json"))
     root = logging.getLogger()
     root.handlers.clear()

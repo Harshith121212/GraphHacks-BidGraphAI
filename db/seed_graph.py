@@ -77,6 +77,8 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     MERGE (:Region {name: 'Andhra Pradesh', state_code: 'AP'})
     MERGE (:Region {name: 'Telangana', state_code: 'TG'})
     MERGE (:Region {name: 'Uttarakhand', state_code: 'UK'})
+    MERGE (:Region {name: 'Himachal Pradesh', state_code: 'HP'})
+    MERGE (:Region {name: 'Madhya Pradesh', state_code: 'MP'})
     """)
 
     # Work Categories
@@ -227,16 +229,18 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     MERGE (t_past)-[:REQUIRES_PRODUCT {quantity: 6000, unit: 'METERS', requires_oem_or_auth: true}]->(p_cab)
     """)
 
-    # Connect the primary active CPPP electrical tenders to Havells brand and wire specialization
-    # so lookalike peer discovery executes natively on actual scraped tenders
+    # Connect the primary active CPPP electrical tenders to Havells brand, wire specialization,
+    # and dept_hurl so lookalike peer discovery executes natively on actual 5-hop graph connections
     graph.query("""
     MATCH (t:Tender)
     WHERE t.id IN ['IWD/IE/26-27/RT2/E-49', 'H/G/CNM/26-27/26P158/TE-206']
+    MATCH (d_hurl:Department {id: 'dept_hurl'})
     MATCH (b_hav:Brand {name: 'Havells'})
     MATCH (s_wire:Specialization {name: 'Wire Manufacturing Facility'})
     MATCH (c_bis:Certification {name: 'BIS IS-7098'})
     MATCH (p_cab:Product {name: 'LT/HT Armoured Cables'})
     MATCH (ec_elec:EnlistmentClass {code: 'CPWD-CLASS-II-ELECT'})
+    MERGE (d_hurl)-[:ISSUED]->(t)
     MERGE (t)-[:PREFERS_BRAND {strict_auth_required: true}]->(b_hav)
     MERGE (t)-[:REQUIRES_SPECIALIZATION]->(s_wire)
     MERGE (t)-[:REQUIRES_CERT]->(c_bis)
@@ -781,6 +785,15 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     MERGE (c_defaulter)-[:OPERATES_IN {gstin: '29EEEEE4444E1Z9', gst_valid: true, filing_status: 'ACTIVE'}]->(r_kar)
     """)
 
+    # Multi-State National Operating Presence for legitimate non-blacklisted contractors
+    graph.query("""
+    MATCH (c:Client)
+    WHERE c.is_blacklisted = false
+    MATCH (r:Region)
+    WHERE r.name IN ['Karnataka', 'Maharashtra', 'Delhi', 'Uttar Pradesh', 'Assam', 'West Bengal', 'Tamil Nadu', 'Gujarat', 'Rajasthan', 'Himachal Pradesh', 'Madhya Pradesh', 'Uttarakhand']
+    MERGE (c)-[:OPERATES_IN {gst_valid: true, filing_status: 'ACTIVE'}]->(r)
+    """)
+
     # Seed Initial Demo JV Consortium and Dispatched Alerts
     initial_jv_tree = {
         "stage1_solo_disqualification": {
@@ -902,6 +915,18 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     MATCH (c:Client {id: 'client_apex'}), (d:Department {id: 'dept_ntpc'})
     MERGE (c)-[da:DEPARTMENT_AFFINITY]->(d)
     SET da.wins = 3, da.losses = 1, da.win_rate = 0.75, da.affinity_weight = 0.1875, da.updated_at = 1700000000
+    """)
+
+    # Normalize WorkCategory variations
+    graph.query("""
+    MATCH (t:Tender)-[:IN_CATEGORY]->(wc:WorkCategory {name: 'IT hardware'})
+    MERGE (c:WorkCategory {name: 'IT Hardware'})
+    MERGE (t)-[:IN_CATEGORY]->(c)
+    """)
+    graph.query("""
+    MATCH (t:Tender)-[:IN_CATEGORY]->(wc:WorkCategory {name: 'Civil'})
+    MERGE (c:WorkCategory {name: 'Civil Works'})
+    MERGE (t)-[:IN_CATEGORY]->(c)
     """)
 
     # Query counts for summary

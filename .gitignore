@@ -21,3 +21,6 @@ htmlcov/
 *.swo
 .DS_Store
 *.log
+
+# Scraper cache
+data/raw/

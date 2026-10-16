@@ -74,7 +74,7 @@ def run_ingestion_cycle(
                     try:
                         scraped = list(scraper.scrape())
                         for item in scraped:
-                            d = item.model_dump() if hasattr(item, "model_dump") else dict(item)
+                            d = item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item)
                             tenders_to_process.append(d)
                             if len(tenders_to_process) >= limit:
                                 break

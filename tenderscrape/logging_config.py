@@ -34,7 +34,7 @@ class StructuredFormatter(logging.Formatter):
 
 
 def configure_logging(level: str, output_format: str) -> None:
-    handler = logging.StreamHandler(sys.stdout)
+    handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(StructuredFormatter(output_format))
     root = logging.getLogger()
     root.handlers.clear()
