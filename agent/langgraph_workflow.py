@@ -1,14 +1,9 @@
-"""LangGraph + LangChain Agentic Tender Intelligence Workflow for BidGraphAI.
 
-Strict Zero-Driver Architecture: Does NOT import falkordb or db.* directly.
-All graph operations execute through BidGraphMCPAgent via FastMCP tools.
-Uses NVIDIA Nemotron 3.5 via OpenRouter for executive cognitive reasoning,
-with deterministic graph fallback for offline/test environments.
-"""
 
 import os
 import time
 import json
+import hashlib
 import logging
 from typing import TypedDict, List, Dict, Any, Optional
 
@@ -60,7 +55,7 @@ def _extract_llm_text(content: Any) -> str:
 class BidGraphLangGraphOrchestrator:
     """
     Coordinates LangGraph StateGraph nodes with MCP tools and NVIDIA Nemotron 3.5.
-    Strictly isolated: ZERO direct falkordb imports.
+    
     """
 
     def __init__(self, agent: Optional[BidGraphMCPAgent] = None):
@@ -261,6 +256,8 @@ class BidGraphLangGraphOrchestrator:
             # Synthesize lookalike peers discovered through graph hopping with Nemotron
             for peer in c.get("lookalike_peers", []):
                 p_id = peer.get("peer_id")
+                if not p_id or p_id == c.get("client_id"):
+                    continue
                 p_name = peer.get("peer_name", p_id)
                 shared_caps = peer.get("shared_capabilities", [])
                 p_score = round(min(0.95, max(0.60, score * 0.90)), 4)
@@ -292,10 +289,11 @@ class BidGraphLangGraphOrchestrator:
                             system_prompt="You are an expert Indian Government procurement AI reasoning engine on Graph DB.",
                         )
                         if llm_text:
+                            anchor_ref = f"Benchmark-Ref-{hashlib.sha256(str(c.get('client_id', '')).encode()).hexdigest()[:8].upper()}"
                             peer_reasoning = (
                                 f"TOOL SEQUENCE >> {peer_plan_str}\n\n"
                                 f"{llm_text}\n\n"
-                                f"[System Traversal Reference: {c.get('client_id')} (Confidential Benchmark - Details Redacted from Client Alert)]"
+                                f"[System Traversal Reference: {anchor_ref} (Confidential Benchmark - Details Redacted from Client Alert)]"
                             )
                     except Exception as exc:
                         logger.warning("Nemotron LLM call for lookalike peer failed: %s", exc)
@@ -373,7 +371,7 @@ class BidGraphLangGraphOrchestrator:
         logger.info("LangGraph Node 3: Synthesized %d cognitive strategy insights.", len(insights))
         return {"executive_strategy_insights": insights}
 
-    # Backward compatibility alias
+    
     gemini_cognitive_reasoning_node = nemotron_cognitive_reasoning_node
 
     async def dispatch_alerts_and_persist_node(self, state: LangGraphAgentState) -> Dict[str, Any]:
@@ -452,6 +450,8 @@ class BidGraphLangGraphOrchestrator:
                 # Lookalike Peer Dispatched Alerts (Graph Hopping)
                 for peer in c.get("lookalike_peers", []):
                     p_id = peer.get("peer_id")
+                    if not p_id or p_id == cid:
+                        continue
                     p_score = round(min(0.95, max(0.60, score * 0.90)), 4)
                     if p_score < threshold:
                         continue
@@ -513,6 +513,8 @@ class BidGraphLangGraphOrchestrator:
                 tid = t.get("id") or t.get("tender_id")
                 reasoning = insights_map.get((lead_id, tid)) or jv.get("graph_path_trace", "JV Consortium qualification.")
                 path_summary = jv.get("graph_path_trace", f"JV: [{lead_id}] + [{partner_id}] -> {tid}")
+                jv_score = float(jv.get("synergy_score", 0.92))
+                partner_score = round(max(0.60, jv_score - 0.02), 4)
 
                 # 1. Lead Partner
                 try:
@@ -522,7 +524,7 @@ class BidGraphLangGraphOrchestrator:
                         {
                             "client_id": lead_id,
                             "tender_id": tid,
-                            "match_score": 0.96,
+                            "match_score": jv_score,
                             "match_type": "JV_CONSORTIUM",
                             "reasoning_trace": reasoning,
                             "path_summary": path_summary,
@@ -537,7 +539,7 @@ class BidGraphLangGraphOrchestrator:
                             "client_id": lead_id,
                             "tender_id": tid,
                             "match_type": "JV_CONSORTIUM",
-                            "match_score": 0.96,
+                            "match_score": jv_score,
                             "action": "ALERT_SENT",
                             "reasoning_trace": reasoning,
                             "path_summary": path_summary,
@@ -548,7 +550,7 @@ class BidGraphLangGraphOrchestrator:
                             "client_id": lead_id,
                             "tender_id": tid,
                             "match_type": "JV_CONSORTIUM",
-                            "match_score": 0.96,
+                            "match_score": jv_score,
                             "action": "ALERT_SKIPPED",
                             "reason": d_data.get("reason"),
                             "reasoning_trace": reasoning,
@@ -566,7 +568,7 @@ class BidGraphLangGraphOrchestrator:
                         {
                             "client_id": partner_id,
                             "tender_id": tid,
-                            "match_score": 0.94,
+                            "match_score": partner_score,
                             "match_type": "JV_CONSORTIUM",
                             "reasoning_trace": partner_reasoning,
                             "path_summary": partner_path,
@@ -581,7 +583,7 @@ class BidGraphLangGraphOrchestrator:
                             "client_id": partner_id,
                             "tender_id": tid,
                             "match_type": "JV_CONSORTIUM",
-                            "match_score": 0.94,
+                            "match_score": partner_score,
                             "action": "ALERT_SENT",
                             "reasoning_trace": partner_reasoning,
                             "path_summary": partner_path,
@@ -592,7 +594,7 @@ class BidGraphLangGraphOrchestrator:
                             "client_id": partner_id,
                             "tender_id": tid,
                             "match_type": "JV_CONSORTIUM",
-                            "match_score": 0.94,
+                            "match_score": partner_score,
                             "action": "ALERT_SKIPPED",
                             "reason": p_data.get("reason"),
                             "reasoning_trace": partner_reasoning,

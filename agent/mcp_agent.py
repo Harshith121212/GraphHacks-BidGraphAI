@@ -4,6 +4,7 @@ import os
 import sys
 import time
 import json
+import hashlib
 import logging
 import asyncio
 from contextlib import asynccontextmanager
@@ -118,6 +119,9 @@ class BidGraphMCPAgent:
         self.nemotron_llm = None
         self.openrouter_client = self.client_alpha or self.client_beta
         self.openrouter_model = self.nemotron_model
+        self._llm_call_timestamps: List[float] = []
+        self._LLM_MAX_CALLS_PER_MINUTE = 40
+        self._llm_cooldown_until: float = 0.0
 
     async def _call_nemotron_agent_async(
         self,
@@ -128,17 +132,31 @@ class BidGraphMCPAgent:
         temperature: float = 0.1,
     ) -> Optional[str]:
         """Dispatches reasoning task to the designated NVIDIA Nemotron Agent with optimized latency."""
-        client = self.client_alpha if agent_name == "alpha" else self.client_beta
-        if not client:
-            client = self.client_beta or self.client_alpha
-
-        if not client:
-            return None
-
-        key_label = "Key 1 (ALPHA)" if client == self.client_alpha else "Key 2 (BETA)"
-        logger.info("Invoking OpenRouter %s using %s [%s]...", agent_name.upper(), key_label, self.nemotron_model)
-
         try:
+            now = time.time()
+            if now < getattr(self, "_llm_cooldown_until", 0.0):
+                return None
+
+            client = self.client_alpha if agent_name == "alpha" else self.client_beta
+            if not client:
+                client = self.client_beta or self.client_alpha
+
+            if not client:
+                return None
+
+            # Rate-limiting guard: protect OpenRouter budget from rapid floods (atomic in Python asyncio)
+            self._llm_call_timestamps = [ts for ts in self._llm_call_timestamps if now - ts < 60.0]
+            if len(self._llm_call_timestamps) >= self._LLM_MAX_CALLS_PER_MINUTE:
+                logger.warning(
+                    "OpenRouter LLM rate limit budget reached (%d calls/min); utilizing deterministic graph reasoning fallback.",
+                    self._LLM_MAX_CALLS_PER_MINUTE
+                )
+                return None
+            self._llm_call_timestamps.append(now)
+
+            key_label = "Key 1 (ALPHA)" if client == self.client_alpha else "Key 2 (BETA)"
+            logger.info("Invoking OpenRouter %s using %s [%s]...", agent_name.upper(), key_label, self.nemotron_model)
+
             res = await asyncio.wait_for(
                 client.chat.completions.create(
                     model=self.nemotron_model,
@@ -161,7 +179,12 @@ class BidGraphMCPAgent:
                 return reasoning.strip()
             return None
         except Exception as exc:
-            logger.warning("NVIDIA Nemotron Agent %s call failed: %s", agent_name.upper(), exc)
+            err_str = str(exc)
+            if "429" in err_str or "Rate limit" in err_str or "Event loop is closed" in err_str:
+                self._llm_cooldown_until = time.time() + 300.0
+                logger.warning("OpenRouter rate limit / event loop error detected; circuit breaker activated for 5m: %s", exc)
+            else:
+                logger.warning("NVIDIA Nemotron Agent %s call failed: %s", agent_name.upper(), exc)
             return None
 
     async def _alpha_call_model_async(
@@ -440,9 +463,10 @@ class BidGraphMCPAgent:
             past_tender = primary_peer.get("past_tender_id", "Past Project")
             dept = primary_peer.get("department", t_dept)
             shared = primary_peer.get("shared_capabilities", [])
+            peer_ref = f"Benchmark-Ref-{hashlib.sha256(str(peer_id).encode()).hexdigest()[:8].upper()}" if peer_id else "Benchmark-Ref"
             reasoning_lines.append(
                 f"5. 5-HOP GRAPH TRAVERSAL & COMPETITIVE BENCHMARKING:\n"
-                f"   [System Traversal Reference: {peer_id} (Confidential Benchmark Competitor - Details Redacted)]\n"
+                f"   [System Traversal Reference: {peer_ref} (Confidential Benchmark Competitor - Details Redacted)]\n"
                 f"   AI Agent hopped across connected FalkorDB capability graph from a top-qualifying benchmark competitor who won past contract '{past_tender}' under {dept}.\n"
                 f"   Shared capability overlap: {', '.join(shared)}."
             )
@@ -464,8 +488,8 @@ class BidGraphMCPAgent:
         Explains why peer_id was alerted based on multi-hop traversal from the primary qualifying anchor,
         while strictly protecting the primary competitor's confidentiality (zero name/turnover leaks).
         """
-        cid = candidate["client_id"]
-        peer_id = peer["peer_id"]
+        cid = candidate.get("client_id", "Unknown")
+        peer_id = peer.get("peer_id", cid)
         peer_name = peer.get("peer_name", peer_id)
         t_id = tender_meta.get("id", "Unknown")
         t_title = tender_meta.get("title", "Government Tender")
@@ -503,7 +527,7 @@ class BidGraphMCPAgent:
             f"   - Hopped from anchor capability nodes to discover structural lookalike peer '{peer_name}' ({peer_id}).",
             f"   - Connected Capabilities: {', '.join(shared) if shared else 'Core Technical Enlistments'}.",
             f"3. STRICT BIDDER CONFIDENTIALITY (PRIVACY SHIELD):",
-            f"   [System Traversal Reference: {cid} (Confidential Benchmark - Corporate Identity & Details Redacted)]",
+            f"   [System Traversal Reference: Benchmark-Ref-{hashlib.sha256(str(cid).encode()).hexdigest()[:8].upper()} (Confidential Benchmark - Corporate Identity & Details Redacted)]",
             f"   Anchor competitor corporate identity, name, and turnover are strictly masked to ensure competitive bid isolation.",
             f"4. DECISIVE WINNING PLUS POINTS FOR {peer_name.upper()}:",
             plus_bullets,
@@ -692,9 +716,10 @@ class BidGraphMCPAgent:
                 past_tender = primary_peer.get("past_tender_id", "Past Project")
                 dept = primary_peer.get("department", t_dept)
                 shared = primary_peer.get("shared_capabilities", [])
+                peer_ref = f"Benchmark-Ref-{hashlib.sha256(str(peer_id).encode()).hexdigest()[:8].upper()}" if peer_id else "Benchmark-Ref"
                 ai_reasoning_lines.append(
                     f"5. 5-HOP GRAPH TRAVERSAL & COMPETITIVE BENCHMARKING:\n"
-                    f"   [System Traversal Reference: {peer_id} (Confidential Benchmark Competitor - Details Redacted)]\n"
+                    f"   [System Traversal Reference: {peer_ref} (Confidential Benchmark Competitor - Details Redacted)]\n"
                     f"   AI Agent hopped across connected FalkorDB capability graph from a top-qualifying benchmark competitor who won past contract '{past_tender}' under {dept}.\n"
                     f"   Shared capability overlap: {', '.join(shared)}."
                 )
@@ -799,7 +824,7 @@ class BidGraphMCPAgent:
                 f"   - Hopped from anchor capability nodes to discover structural lookalike peer '{peer_name}' ({peer_id}).",
                 f"   - Connected Capabilities: {', '.join(shared) if shared else 'Core Technical Enlistments'}.",
                 f"3. STRICT BIDDER CONFIDENTIALITY (PRIVACY SHIELD):",
-                f"   [System Traversal Reference: {cid} (Confidential Benchmark - Corporate Identity & Details Redacted)]",
+                f"   [System Traversal Reference: Benchmark-Ref-{hashlib.sha256(str(cid).encode()).hexdigest()[:8].upper()} (Confidential Benchmark - Corporate Identity & Details Redacted)]",
                 f"   Anchor competitor corporate identity, name, and turnover are strictly masked to ensure competitive bid isolation.",
                 f"4. DECISIVE WINNING PLUS POINTS FOR {peer_name.upper()}:",
                 "\n".join([f"   {p}" for p in plus_points]),
@@ -1035,9 +1060,10 @@ class BidGraphMCPAgent:
             past_tender = primary_peer.get("past_tender_id", "Past Project")
             dept = primary_peer.get("department", t_dept)
             shared = primary_peer.get("shared_capabilities", [])
+            peer_ref = f"Benchmark-Ref-{hashlib.sha256(str(peer_id).encode()).hexdigest()[:8].upper()}" if peer_id else "Benchmark-Ref"
             ai_reasoning_lines.append(
                 f"5. 5-HOP GRAPH TRAVERSAL & COMPETITIVE BENCHMARKING:\n"
-                f"   [System Traversal Reference: {peer_id} (Confidential Benchmark Competitor - Details Redacted)]\n"
+                f"   [System Traversal Reference: {peer_ref} (Confidential Benchmark Competitor - Details Redacted)]\n"
                 f"   Nemotron agent navigated FalkorDB capability graph from past contract '{past_tender}' under {dept}.\n"
                 f"   Shared capability overlap: {', '.join(shared)}."
             )
@@ -1119,7 +1145,7 @@ class BidGraphMCPAgent:
             f"   - Discovered structural lookalike peer '{peer_name}' ({peer_id}).",
             f"   - Connected Capabilities: {', '.join(shared) if shared else 'Core Technical Enlistments'}.",
             f"3. STRICT BIDDER CONFIDENTIALITY (PRIVACY SHIELD):",
-            f"   [System Traversal Reference: {cid} (Confidential Benchmark - Corporate Identity & Details Redacted)]",
+            f"   [System Traversal Reference: Benchmark-Ref-{hashlib.sha256(str(cid).encode()).hexdigest()[:8].upper()} (Confidential Benchmark - Corporate Identity & Details Redacted)]",
             f"4. DECISIVE WINNING PLUS POINTS FOR {peer_name.upper()} (NEMOTRON REASONING):",
             "\n".join([f"   {p}" for p in plus_points]),
             f"5. AI AGENT DECISION: Dispatched lookalike tender alert with {round(peer_score * 100)}% projected fit.",
@@ -1383,10 +1409,12 @@ class BidGraphMCPAgent:
                     evaluating_agent=agent_label,
                 ))
 
-            # Lookalike peers
+            # Lookalike peers (if individual candidate peer IDs were returned)
             lookalike_peers = cand.get("lookalike_peers", [])
             for peer in lookalike_peers:
-                peer_id = peer["peer_id"]
+                peer_id = peer.get("peer_id")
+                if not peer_id or peer_id == cid:
+                    continue
                 peer_score = round(min(0.95, max(0.60, match_score * 0.90)), 4)
                 if peer_score < min_score_threshold:
                     continue
@@ -1489,13 +1517,16 @@ class BidGraphMCPAgent:
                     jv, t, tool_plan=jv_tool_plan
                 )
 
+            jv_score = float(jv.get("synergy_score", 0.92))
+            partner_score = round(max(0.60, jv_score - 0.02), 4)
+
             dispatch_data, trace = await self._call_tool(
                 session,
                 "dispatch_tender_alert_with_trace",
                 {
                     "client_id": lead_id,
                     "tender_id": t_id,
-                    "match_score": 0.95,
+                    "match_score": jv_score,
                     "match_type": "JV_CONSORTIUM",
                     "reasoning_trace": jv_reasoning,
                     "path_summary": jv_path_summary,
@@ -1511,7 +1542,7 @@ class BidGraphMCPAgent:
                     client_id=lead_id,
                     tender_id=t_id,
                     match_type="JV_CONSORTIUM",
-                    match_score=0.95,
+                    match_score=jv_score,
                     action="ALERT_SENT",
                     reason=None,
                     reasoning_trace=jv_reasoning,
@@ -1524,7 +1555,7 @@ class BidGraphMCPAgent:
                     client_id=lead_id,
                     tender_id=t_id,
                     match_type="JV_CONSORTIUM",
-                    match_score=0.95,
+                    match_score=jv_score,
                     action="ALERT_SKIPPED",
                     reason=dispatch_data.get("reason"),
                     reasoning_trace=jv_reasoning,
@@ -1532,7 +1563,7 @@ class BidGraphMCPAgent:
                     evaluating_agent=agent_label,
                 ))
 
-            # Partner (40%)
+            # Partner (Equity share based on turnover contribution)
             if agent_type == "alpha":
                 partner_reasoning, partner_path_summary = await self._ai_synthesize_jv_partner_reasoning(
                     jv, t, tool_plan=jv_tool_plan
@@ -1548,7 +1579,7 @@ class BidGraphMCPAgent:
                 {
                     "client_id": partner_id,
                     "tender_id": t_id,
-                    "match_score": 0.94,
+                    "match_score": partner_score,
                     "match_type": "JV_CONSORTIUM",
                     "reasoning_trace": partner_reasoning,
                     "path_summary": partner_path_summary,
@@ -1564,7 +1595,7 @@ class BidGraphMCPAgent:
                     client_id=partner_id,
                     tender_id=t_id,
                     match_type="JV_CONSORTIUM",
-                    match_score=0.94,
+                    match_score=partner_score,
                     action="ALERT_SENT",
                     reason=None,
                     reasoning_trace=partner_reasoning,
@@ -1577,7 +1608,7 @@ class BidGraphMCPAgent:
                     client_id=partner_id,
                     tender_id=t_id,
                     match_type="JV_CONSORTIUM",
-                    match_score=0.94,
+                    match_score=partner_score,
                     action="ALERT_SKIPPED",
                     reason=p_dispatch.get("reason"),
                     reasoning_trace=partner_reasoning,
@@ -1811,10 +1842,10 @@ class BidGraphMCPAgent:
                     department_name=a["department_name"],
                     ministry_name=a["ministry_name"],
                     tender_amount=a["tender_amount"],
-                    match_score=a["match_score"],
-                    match_type=a["match_type"],
+                    match_score=float(a["match_score"]) if a.get("match_score") is not None else 0.90,
+                    match_type=str(a.get("match_type") or "DIRECT"),
                     status=a["status"],
-                    alert_count=a["alert_count"],
+                    alert_count=int(a["alert_count"]) if a.get("alert_count") is not None else 1,
                     first_matched_at=a.get("first_matched_at"),
                     last_alert_sent=a.get("last_alert_sent"),
                     cooldown_active=a.get("cooldown_active", False),
