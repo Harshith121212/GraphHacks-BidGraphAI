@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BidGraphAI — FalkorDB Tender Intelligence & MCP Agent Engine</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#eef2ff',
+              500: '#6366f1',
+              600: '#4f46e5',
+              700: '#4338ca',
+              900: '#1e1b4b',
+            },
+            falkor: {
+              red: '#f43f5e',
+              glow: '#fb7185',
+              dark: '#0f172a',
+              card: '#1e293b',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- D3.js v7 -->
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <!-- Custom Dark Theme Stylesheet -->
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans antialiased selection:bg-indigo-500 selection:text-white">
+
+  <!-- Top Telemetry & Scraper Heartbeat Banner -->
+  <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex flex-wrap items-center justify-between gap-4">
+      
+      <!-- Brand & Engine Title -->
+      <div class="flex items-center space-x-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-rose-500 via-indigo-600 to-cyan-400 p-0.5 shadow-lg shadow-indigo-500/20">
+          <div class="w-full h-full bg-slate-950 rounded-[10px] flex items-center justify-center">
+            <i data-lucide="network" class="w-5 h-5 text-indigo-400"></i>
+          </div>
+        </div>
+        <div>
+          <div class="flex items-center space-x-2">
+            <h1 class="text-lg font-bold tracking-tight text-white flex items-center gap-1.5">
+              BidGraph<span class="text-indigo-400">AI</span>
+            </h1>
+            <span class="px-2 py-0.5 text-xs font-semibold rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20">
+              FalkorDB + MCP FastMCP
+            </span>
+            <span class="px-2 py-0.5 text-xs font-semibold rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
+              <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
+              Live Engine
+            </span>
+          </div>
+          <p class="text-xs text-slate-400">Multi-Hop Lookalike & JV Consortium Intelligence for Indian Public Tenders</p>
+        </div>
+      </div>
+
+      <!-- Scraper Heartbeat Telemetry -->
+      <div class="flex items-center space-x-6 text-xs text-slate-300 bg-slate-950/60 px-4 py-2 rounded-lg border border-slate-800">
+        <div class="flex items-center space-x-2">
+          <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+          <div>
+            <span class="text-slate-400 block text-[10px] uppercase font-mono tracking-wider">CPPP/GeM Scraper</span>
+            <span id="scraper-status-time" class="font-medium text-slate-200">Syncing...</span>
+          </div>
+        </div>
+        <div class="h-6 w-px bg-slate-800"></div>
+        <div>
+          <span class="text-slate-400 block text-[10px] uppercase font-mono tracking-wider">Tenders Ingested</span>
+          <span id="scraper-tenders-count" class="font-medium text-indigo-400 font-mono">--</span>
+        </div>
+        <div class="h-6 w-px bg-slate-800"></div>
+        <div>
+          <span class="text-slate-400 block text-[10px] uppercase font-mono tracking-wider">Graph Topology</span>
+          <span id="graph-topology-stats" class="font-medium text-cyan-400 font-mono">Nodes: -- | Edges: --</span>
+        </div>
+      </div>
+
+      <!-- Primary Action Buttons & 48h Time-Jump Simulator -->
+      <div class="flex items-center flex-wrap gap-2">
+        <!-- Unified Hero AI Matching Button (NVIDIA Nemotron + FalkorDB) -->
+        <button id="btn-run-match" class="px-4 py-2 text-xs font-bold rounded-xl bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 hover:from-indigo-500 hover:via-purple-500 hover:to-pink-500 text-white shadow-lg shadow-indigo-500/30 hover:shadow-indigo-500/50 transition-all flex items-center gap-2 border border-purple-300/30 transform hover:-translate-y-0.5 active:translate-y-0">
+          <i data-lucide="sparkles" class="w-4 h-4 text-amber-300 animate-pulse"></i>
+          <span>Run AI Tender Matching</span>
+          <span class="px-1.5 py-0.2 rounded text-[9px] font-mono bg-black/40 text-amber-200 border border-amber-300/30">NVIDIA Nemotron</span>
+        </button>
+
+        <!-- Secondary Utility Tools -->
+        <div class="flex items-center space-x-1.5 bg-slate-950/60 p-1 rounded-xl border border-slate-800">
+          <!-- Pull Tender Data Button -->
+          <button id="btn-pull-tenders" title="Refresh active tenders from FalkorDB" class="px-2.5 py-1.5 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 hover:border-slate-600 transition flex items-center gap-1.5 shadow-sm">
+            <i data-lucide="refresh-cw" class="w-3.5 h-3.5 text-cyan-400"></i>
+            <span>Refresh Tenders</span>
+          </button>
+
+          <!-- +48h Time-Jump Simulator Control -->
+          <button id="btn-time-jump" title="Advance simulated clock by 48 Hours to test alert cooldown expiration" class="px-2.5 py-1.5 text-xs font-medium rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition flex items-center gap-1.5">
+            <i data-lucide="fast-forward" class="w-3.5 h-3.5 text-amber-400"></i>
+            <span id="time-jump-label">+48h Time Jump</span>
+          </button>
+
+          <!-- Ingest Live Indian Govt Tenders Button -->
+          <button id="btn-ingest-sample" title="Scrape live tenders from Indian Government Portals (GeM & CPPP), enrich criteria, and upload to FalkorDB" class="px-2.5 py-1.5 text-xs font-medium rounded-lg bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border border-purple-500/30 transition flex items-center gap-1">
+            <i data-lucide="cloud-download" class="w-3.5 h-3.5 text-purple-400"></i>
+            <span>+ Ingest Live Tenders</span>
+          </button>
+
+          <!-- Clear Tenders Button -->
+          <button id="btn-clear-tenders" title="Delete all active tender records from FalkorDB" class="px-2.5 py-1.5 text-xs font-medium rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-300 border border-red-500/30 transition flex items-center gap-1">
+            <i data-lucide="trash-2" class="w-3.5 h-3.5 text-red-400"></i>
+            <span>Clear Tenders</span>
+          </button>
+
+          <!-- Reset Demo Graph Button -->
+          <button id="btn-reset-demo" title="Reset FalkorDB to initial benchmark demo state via MCP" class="px-2.5 py-1.5 text-xs font-medium rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 transition flex items-center gap-1">
+            <i data-lucide="rotate-ccw" class="w-3.5 h-3.5 text-rose-400"></i>
+            <span>Reset</span>
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- Persistent Bottom-Right Notification & Buffering Stack -->
+  <div class="fixed bottom-5 right-5 z-50 flex flex-col space-y-3 w-[26rem] max-w-[calc(100vw-2.5rem)] pointer-events-none">
+    
+    <!-- Highlighted AI Buffering & Cognitive Execution Card -->
+    <div id="ai-buffering-bar" class="hidden pointer-events-auto rounded-2xl bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950/95 border-2 border-indigo-400 p-4 backdrop-blur-xl shadow-2xl transition-all duration-300">
+      
+      <!-- Top Row: Status Badge, Title & Live Elapsed Stopwatch -->
+      <div class="flex items-center justify-between gap-2 pb-2.5 border-b border-indigo-500/30">
+        <div class="flex items-center gap-2.5">
+          <div id="ai-buffering-icon-wrap" class="relative flex items-center justify-center shrink-0">
+            <span class="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-500/30 to-purple-600/30 border border-indigo-400/50 flex items-center justify-center shadow-inner">
+              <i id="ai-buffering-icon" data-lucide="loader-2" class="w-4 h-4 animate-spin-fast text-indigo-300"></i>
+            </span>
+            <span id="ai-buffering-ping" class="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping"></span>
+            <span id="ai-buffering-dot" class="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-cyan-400 shadow-sm shadow-cyan-300"></span>
+          </div>
+          <div>
+            <div class="flex items-center gap-1.5">
+              <span id="ai-buffering-badge" class="px-2 py-0.5 rounded-full text-[9px] font-mono font-black uppercase tracking-wider bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-sm shadow-indigo-500/50">
+                AI Reasoning Active
+              </span>
+            </div>
+            <div id="ai-buffering-title" class="text-xs font-bold text-white tracking-tight mt-0.5 flex items-center gap-1">
+              <span>NVIDIA Nemotron Reasoning</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Live Stopwatch Timer -->
+        <div class="flex items-center gap-1.5 bg-slate-950/90 border border-cyan-500/40 px-2.5 py-1 rounded-lg shrink-0 shadow-inner">
+          <i data-lucide="clock" class="w-3.5 h-3.5 text-cyan-400 animate-pulse"></i>
+          <span id="ai-buffering-timer" class="font-mono font-black text-cyan-300 text-sm tracking-wider">0.0s</span>
+        </div>
+      </div>
+
+      <!-- Center Box: Real-Time Dynamic Progress Stage -->
+      <div class="bg-slate-950/80 rounded-xl p-2.5 my-2.5 border border-slate-800/80 shadow-inner">
+        <div class="flex items-center justify-between text-[10px] font-mono text-slate-400 mb-1">
+          <span class="flex items-center gap-1 text-indigo-300 font-semibold uppercase tracking-wider">
+            <i data-lucide="git-commit" class="w-3 h-3 text-indigo-400"></i> Active Pipeline Stage
+          </span>
+          <span class="text-[9px] text-cyan-400 font-semibold bg-cyan-500/10 px-1.5 py-0.2 rounded border border-cyan-500/20">
+            FalkorDB ↔ NVIDIA Nemotron
+          </span>
+        </div>
+        <p id="ai-buffering-subtitle" class="text-[11px] text-slate-200 font-mono leading-relaxed">
+          Step 1/3: Accelerated AI reasoning & tender criteria evaluation...
+        </p>
+      </div>
+
+      <!-- Bottom Progress Bar: Glowing Indeterminate Animation -->
+      <div class="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-indigo-500/40 relative shadow-inner">
+        <div id="ai-buffering-progress" class="h-full bg-gradient-to-r from-cyan-400 via-indigo-500 to-pink-500 rounded-full w-1/3 animate-indeterminate shadow-[0_0_12px_rgba(99,102,241,0.8)]"></div>
+      </div>
+
+    </div>
+
+    <!-- Notification Toast Container -->
+    <div id="toast-container" class="flex flex-col space-y-2 pointer-events-none"></div>
+
+  </div>
+
+  <!-- Main Multi-Panel Workspace -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-5">
+
+    <!-- Match Statistics & Summary Cards -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div class="glass-card p-4 rounded-xl border border-slate-800 bg-slate-900/50">
+        <div class="flex items-center justify-between text-slate-400 text-xs font-mono">
+          <span>ACTIVE TENDERS</span>
+          <i data-lucide="file-text" class="w-4 h-4 text-cyan-400"></i>
+        </div>
+        <div id="stat-active-tenders" class="text-2xl font-bold text-white mt-1">--</div>
+        <p class="text-[11px] text-slate-400 mt-1">GeM, CPWD, NHAI, Indian Railways</p>
+      </div>
+
+      <div class="glass-card p-4 rounded-xl border border-slate-800 bg-slate-900/50">
+        <div class="flex items-center justify-between text-slate-400 text-xs font-mono">
+          <span>DISPATCHED ALERTS</span>
+          <i data-lucide="bell-ring" class="w-4 h-4 text-indigo-400"></i>
+        </div>
+        <div id="stat-dispatched-alerts" class="text-2xl font-bold text-indigo-400 mt-1">--</div>
+        <p class="text-[11px] text-slate-400 mt-1">Direct & Lookalike Peer Matches</p>
+      </div>
+
+      <div class="glass-card p-4 rounded-xl border border-slate-800 bg-slate-900/50">
+        <div class="flex items-center justify-between text-slate-400 text-xs font-mono">
+          <span>JV CONSORTIUM PAIRS</span>
+          <i data-lucide="users" class="w-4 h-4 text-amber-400"></i>
+        </div>
+        <div id="stat-jv-consortiums" class="text-2xl font-bold text-amber-400 mt-1">--</div>
+        <p class="text-[11px] text-slate-400 mt-1">Complementary Turnkey Bids</p>
+      </div>
+
+      <div class="glass-card p-4 rounded-xl border border-slate-800 bg-slate-900/50">
+        <div class="flex items-center justify-between text-slate-400 text-xs font-mono">
+          <span>SIMULATED CLOCK</span>
+          <i data-lucide="clock" class="w-4 h-4 text-rose-400"></i>
+        </div>
+        <div id="stat-simulated-clock" class="text-base font-bold text-emerald-400 mt-1 font-mono">Live Now (+0h)</div>
+        <p class="text-[11px] text-slate-400 mt-1">Enforcing 48h Cooldown in DB</p>
+      </div>
+    </div>
+
+    <!-- Executive Workspace View Switcher Tabs -->
+    <div class="flex items-center justify-between border-b border-slate-800/80 pb-3 flex-wrap gap-3">
+      <div class="flex items-center space-x-1.5 bg-slate-900/90 p-1.5 rounded-xl border border-slate-800">
+        <button id="tab-btn-alerts" class="workspace-tab active px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-2">
+          <i data-lucide="bell-ring" class="w-3.5 h-3.5 text-indigo-400"></i>
+          <span>AI Dispatched Alerts</span>
+          <span id="alerts-count-badge" class="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">0</span>
+        </button>
+
+        <button id="tab-btn-jv" class="workspace-tab px-3.5 py-1.5 rounded-lg text-xs font-bold text-slate-400 hover:text-white transition flex items-center gap-2">
+          <i data-lucide="handshake" class="w-3.5 h-3.5 text-amber-400"></i>
+          <span>JV Consortium Hub</span>
+          <span id="jv-consortiums-badge" class="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">0</span>
+        </button>
+
+        <button id="tab-btn-tenders" class="workspace-tab px-3.5 py-1.5 rounded-lg text-xs font-bold text-slate-400 hover:text-white transition flex items-center gap-2">
+          <i data-lucide="file-text" class="w-3.5 h-3.5 text-cyan-400"></i>
+          <span>Active Procurement Tenders</span>
+          <span id="tenders-count-badge" class="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">42</span>
+        </button>
+      </div>
+
+      <div class="flex items-center space-x-2 text-xs font-mono text-slate-400">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span>Primary Engine: <strong class="text-indigo-300">FalkorDB Multi-Hop Graph DB</strong></span>
+      </div>
+    </div>
+
+    <!-- Central Split Cockpit: Left Active View (7 Cols) & Right Live Graph/Memory (5 Cols) -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+
+      <!-- LEFT: Dynamic Workspace Panels (7 Cols) -->
+      <section class="lg:col-span-7 space-y-4">
+
+        <!-- VIEW 1: AI Tender Alert Feed Panel (Default Active) -->
+        <div id="panel-alerts" class="space-y-4">
+          <!-- Filter Bar with Client Selection -->
+          <div class="flex items-center justify-between flex-wrap gap-2 pb-1 border-b border-slate-800/60">
+            <div>
+              <h2 class="text-base font-bold text-white flex items-center flex-wrap gap-2">
+                <i data-lucide="radar" class="w-4 h-4 text-indigo-400"></i>
+                <span>Tender Alert Feed & AI Analysis</span>
+                <span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 flex items-center gap-1"><i data-lucide="cpu" class="w-2.5 h-2.5 text-indigo-400"></i> NVIDIA Nemotron</span>
+                <span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1"><i data-lucide="zap" class="w-2.5 h-2.5 text-emerald-400"></i> Accelerated AI Reasoning</span>
+              </h2>
+              <p class="text-[11px] text-slate-400">Accelerated AI reasoning evaluates active tenders with intelligent capability matching and win-strategy analysis</p>
+            </div>
+
+            <!-- Client Filter Pills & Batch Email Button -->
+            <div class="flex items-center space-x-2 flex-wrap">
+              <button id="btn-draft-all-emails" title="Send executive tender alert emails to hackathon-demo@outlook.com for all matched clients" class="px-2.5 py-1 text-xs font-semibold rounded-lg bg-indigo-500/10 hover:bg-indigo-500/25 text-indigo-300 border border-indigo-500/30 transition flex items-center gap-1.5 shadow-sm">
+                <i data-lucide="send" class="w-3.5 h-3.5 text-indigo-400"></i>
+                <span>✉ Send Batch Alert</span>
+              </button>
+
+              <div class="flex items-center space-x-1 bg-slate-900/90 p-1 rounded-lg border border-slate-800 text-xs overflow-x-auto max-w-full">
+                <button data-client-filter="ALL" class="client-tab active px-2.5 py-0.5 rounded font-medium text-slate-300 hover:text-white transition whitespace-nowrap">All</button>
+                <button data-client-filter="client_surya" class="client-tab px-2 py-0.5 rounded font-medium text-slate-400 hover:text-white transition whitespace-nowrap">Surya</button>
+                <button data-client-filter="client_bharat_it" class="client-tab px-2 py-0.5 rounded font-medium text-slate-400 hover:text-white transition whitespace-nowrap">Bharat IT</button>
+                <button data-client-filter="client_apex" class="client-tab px-2 py-0.5 rounded font-medium text-slate-400 hover:text-white transition whitespace-nowrap">Apex</button>
+                <button data-client-filter="client_kaveri" class="client-tab px-2 py-0.5 rounded font-medium text-slate-400 hover:text-white transition whitespace-nowrap">Kaveri</button>
+                <button data-client-filter="client_voltas_hvac" class="client-tab px-2 py-0.5 rounded font-medium text-slate-400 hover:text-white transition whitespace-nowrap">Voltas</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Alert Cards Container -->
+          <div id="alert-feed-container" class="space-y-3">
+            <div class="p-8 text-center border border-dashed border-slate-800 rounded-xl bg-slate-900/30 text-slate-400">
+              <i data-lucide="play-circle" class="w-8 h-8 text-indigo-400 mx-auto mb-2 opacity-60"></i>
+              <p class="text-sm font-medium">Click "Run AI Tender Matching" above to start intelligent tender evaluation.</p>
+              <p class="text-xs text-slate-400 mt-1">Discovers direct matches, lookalike peer opportunities, and joint venture consortiums.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- VIEW 2: Joint Venture (JV) Consortium Hub Panel (Hidden by default) -->
+        <div id="panel-jv" class="space-y-4 hidden">
+          <div class="flex items-center justify-between border-b border-slate-800/60 pb-2">
+            <div>
+              <div class="flex items-center gap-2">
+                <h2 class="text-base font-bold text-white flex items-center gap-2">
+                  <i data-lucide="handshake" class="w-4 h-4 text-amber-400"></i>
+                  <span>Joint Venture (JV) Consortium & Decision Tree Hub</span>
+                </h2>
+                <span class="px-2 py-0.5 text-[9px] font-mono font-bold rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                  Track 1 & Track 3
+                </span>
+              </div>
+              <p class="text-[11px] text-slate-400 mt-0.5">Complementary syndicate pairing (Lead + Partner) with CPWD/GeM 5-Stage Decision Tree evaluation & DB persistence</p>
+            </div>
+          </div>
+
+          <!-- JV Consortiums Container -->
+          <div id="jv-consortium-container" class="space-y-4">
+            <div class="p-8 text-center border border-dashed border-slate-800 rounded-xl bg-slate-950/40 text-slate-400">
+              <i data-lucide="users" class="w-6 h-6 text-amber-400 mx-auto mb-2 opacity-60"></i>
+              <p class="text-xs font-medium">Loading Joint Venture (JV) consortium pairs from FalkorDB...</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- VIEW 3: Active Procurement Tenders Panel (Hidden by default) -->
+        <div id="panel-tenders" class="space-y-4 hidden">
+          <div class="flex items-center justify-between border-b border-slate-800/60 pb-2">
+            <div>
+              <h2 class="text-base font-bold text-white flex items-center gap-2">
+                <i data-lucide="database" class="w-4 h-4 text-cyan-400"></i>
+                <span>Active Procurement Tenders in FalkorDB</span>
+              </h2>
+              <p class="text-[11px] text-slate-400 mt-0.5">Real GeM & CPPP Indian tenders with estimated budgets and statutory qualification criteria</p>
+            </div>
+          </div>
+
+          <!-- Tenders Grid Container -->
+          <div id="tenders-grid" class="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+            <!-- Rendered dynamically by app.js -->
+          </div>
+        </div>
+
+      </section>
+
+      <!-- RIGHT: Interactive D3.js FalkorDB Graph Explorer & Agent Memory (5 Cols) -->
+      <section class="lg:col-span-5 space-y-4 sticky top-20">
+
+        <!-- D3 Force-Directed Graph Explorer Card -->
+        <div class="glass-card rounded-xl border border-slate-800 bg-slate-900/50 p-4 space-y-3 shadow-lg">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center space-x-2">
+              <i data-lucide="git-fork" class="w-4 h-4 text-rose-400"></i>
+              <h3 class="text-sm font-bold text-white">FalkorDB Graph Topology</h3>
+            </div>
+            <div class="flex items-center space-x-2 text-[10px] text-slate-400">
+              <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-indigo-500"></span> Client</span>
+              <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-cyan-400"></span> Tender</span>
+              <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-amber-400"></span> Dept</span>
+              <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-400"></span> Brand</span>
+            </div>
+          </div>
+
+          <!-- Graph Canvas Container -->
+          <div class="relative w-full h-[320px] bg-slate-950/80 rounded-lg border border-slate-800/80 overflow-hidden">
+            <svg id="graph-canvas" class="w-full h-full cursor-grab active:cursor-grabbing"></svg>
+            <div class="absolute bottom-2 right-2 text-[10px] text-slate-400 bg-slate-900/80 px-2 py-0.5 rounded border border-slate-800">
+              Drag nodes | Scroll to Zoom
+            </div>
+          </div>
+        </div>
+
+        <!-- Agent Brain: Learned Department & Category Affinities Leaderboard -->
+        <div class="glass-card rounded-xl border border-slate-800 bg-slate-900/50 p-4 space-y-2.5 shadow-lg">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center space-x-2">
+              <i data-lucide="brain-circuit" class="w-4 h-4 text-purple-400"></i>
+              <h3 class="text-sm font-bold text-white">Agent Memory: Learned Affinities</h3>
+            </div>
+            <span class="text-[10px] text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded-full border border-purple-500/20">Track 2: Memory Loop</span>
+          </div>
+          <p class="text-[11px] text-slate-400">Updated automatically when you click "Won" or "Lost" next to any alert.</p>
+
+          <div id="affinity-panel" class="space-y-2 max-h-44 overflow-y-auto pr-1">
+            <div class="text-xs text-slate-400 italic py-2 text-center">Loading affinities from FalkorDB...</div>
+          </div>
+        </div>
+
+        <!-- Live MCP Protocol Audit Log -->
+        <div class="glass-card rounded-xl border border-slate-800 bg-slate-900/50 p-4 space-y-2 shadow-lg">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center space-x-2">
+              <i data-lucide="terminal" class="w-4 h-4 text-emerald-400"></i>
+              <h3 class="text-sm font-bold text-white">Live MCP Protocol Audit Log</h3>
+            </div>
+            <span class="text-[10px] font-mono text-emerald-400">FastMCP (stdio)</span>
+          </div>
+
+          <div id="mcp-audit-log" class="bg-slate-950 p-2.5 rounded-lg border border-slate-800 font-mono text-[11px] text-slate-300 space-y-1.5 max-h-32 overflow-y-auto">
+            <div class="text-slate-400 italic">Waiting for MCP tool calls...</div>
+          </div>
+        </div>
+
+      </section>
+
+    </div>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="border-t border-slate-900 bg-slate-950 py-4 text-center text-xs text-slate-400">
+    <div class="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
+      <div>
+        <span class="font-bold text-slate-400">BidGraphAI</span> &bull; FalkorDB &times; Model Context Protocol (MCP) Hackathon
+      </div>
+      <div class="flex items-center space-x-3 text-slate-400">
+        <span>Track 1: Connected Data</span>
+        <span>&bull;</span>
+        <span>Track 2: Memory Loop</span>
+        <span>&bull;</span>
+        <span>Track 3: Company Brain</span>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Modal: Interactive JV Decision Tree Viewer -->
+  <div id="decision-tree-modal" class="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm hidden items-center justify-center p-4">
+    <div class="glass-card bg-slate-900 border border-slate-700 rounded-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto p-6 space-y-5 shadow-2xl">
+      <!-- Modal Header -->
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center space-x-2.5">
+          <div class="w-8 h-8 rounded-lg bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center">
+            <i data-lucide="git-merge" class="w-4 h-4 text-indigo-400"></i>
+          </div>
+          <div>
+            <h3 class="text-sm font-bold text-white" id="dt-modal-title">JV Consortium Decision Tree</h3>
+            <p class="text-[11px] text-slate-400 font-mono" id="dt-modal-subtitle">Graph Verification & AI Reasoning</p>
+          </div>
+        </div>
+        <button id="btn-close-dt-modal" class="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <!-- 5-Stage Decision Tree Stepper / Nodes -->
+      <div id="dt-modal-body" class="space-y-3">
+        <!-- Rendered dynamically by app.js -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Executive Tender Alert Email Viewer (NVIDIA Nemotron-3.5-Lightning-30B) -->
+  <div id="email-preview-modal" class="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm hidden items-center justify-center p-4">
+    <div class="glass-card bg-slate-900 border border-slate-700 rounded-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto p-6 space-y-4 shadow-2xl">
+      <!-- Modal Header -->
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center space-x-3">
+          <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-purple-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+            <i data-lucide="mail" class="w-5 h-5 text-white"></i>
+          </div>
+          <div>
+            <div class="flex items-center gap-2">
+              <h3 class="text-sm font-bold text-white">Executive Tender Alert & Email Notification</h3>
+              <span id="email-modal-engine-badge" class="px-2 py-0.5 text-[9px] font-mono font-bold rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/40">
+                BidGraphAI Communications Agent
+              </span>
+            </div>
+            <p class="text-[11px] text-slate-400 font-mono">Autonomous Dispatch &bull; Target: hackathon-demo@outlook.com</p>
+          </div>
+        </div>
+        <button id="btn-close-email-modal" class="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <!-- Recipient & Status Strip -->
+      <div class="flex flex-wrap items-center justify-between gap-2 p-3 rounded-xl bg-slate-950/70 border border-slate-800 text-xs">
+        <div class="flex items-center gap-2">
+          <span class="text-slate-400 font-medium">Recipient Email:</span>
+          <span id="email-modal-recipient" class="font-mono font-bold text-slate-200">Loading...</span>
+          <span id="email-modal-status-badge" class="px-2 py-0.5 rounded text-[10px] font-mono font-semibold"></span>
+        </div>
+        <div class="text-[11px] text-slate-400 flex items-center gap-1.5">
+          <i data-lucide="database" class="w-3.5 h-3.5 text-indigo-400"></i>
+          <span>Source: <strong class="text-slate-300">FalkorDB Client Node (<code class="text-indigo-300">c.email</code>)</strong></span>
+        </div>
+      </div>
+
+      <!-- Key Tender Highlight Chips -->
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+        <div class="p-2.5 rounded-lg bg-slate-950/50 border border-slate-800/80">
+          <div class="text-[10px] text-slate-400 font-mono">ESTIMATED VALUE</div>
+          <div id="email-modal-value" class="font-bold text-emerald-400 font-mono text-sm mt-0.5">--</div>
+        </div>
+        <div class="p-2.5 rounded-lg bg-slate-950/50 border border-slate-800/80">
+          <div class="text-[10px] text-slate-400 font-mono">SUBMISSION DEADLINE</div>
+          <div id="email-modal-deadline" class="font-bold text-rose-400 font-mono text-xs mt-0.5">--</div>
+        </div>
+        <div class="p-2.5 rounded-lg bg-slate-950/50 border border-slate-800/80">
+          <div class="text-[10px] text-slate-400 font-mono">FIT / MATCH SCORE</div>
+          <div id="email-modal-score" class="font-bold text-indigo-400 font-mono text-sm mt-0.5">--</div>
+        </div>
+        <div class="p-2.5 rounded-lg bg-slate-950/50 border border-slate-800/80">
+          <div class="text-[10px] text-slate-400 font-mono">SCOPE / CATEGORY</div>
+          <div id="email-modal-scope" class="font-medium text-slate-200 text-xs mt-0.5 truncate" title="">--</div>
+        </div>
+      </div>
+
+      <!-- Winning Plus Points Highlight Box -->
+      <div class="p-3 rounded-xl bg-purple-950/20 border border-purple-500/20 text-xs space-y-1.5">
+        <div class="flex items-center gap-1.5 font-bold text-purple-300">
+          <i data-lucide="check-circle" class="w-3.5 h-3.5 text-purple-400"></i>
+          <span>Client Decisive Winning Plus Points for this Tender</span>
+        </div>
+        <ul id="email-modal-plus-points" class="list-disc list-inside space-y-1 text-slate-300 text-[11px] pl-1">
+          <!-- Rendered dynamically -->
+        </ul>
+      </div>
+
+      <!-- Reason Why Client Was Chosen Highlight Box -->
+      <div class="p-3 rounded-xl bg-indigo-950/20 border border-indigo-500/20 text-xs space-y-1.5">
+        <div class="flex items-center justify-between font-bold text-indigo-300">
+          <div class="flex items-center gap-1.5">
+            <i data-lucide="shield-check" class="w-3.5 h-3.5 text-indigo-400"></i>
+            <span>Reason Why Client Was Chosen</span>
+          </div>
+          <span class="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">Competitor Privacy Shield: Active</span>
+        </div>
+        <p id="email-modal-reason-chosen" class="text-slate-300 text-[11px] leading-relaxed">
+          --
+        </p>
+      </div>
+
+      <!-- Subject Line -->
+      <div class="space-y-1.5">
+        <div class="flex items-center justify-between text-xs text-slate-400">
+          <span class="font-medium uppercase tracking-wider text-[10px]">Email Subject</span>
+          <button id="btn-copy-subject" class="text-indigo-400 hover:text-indigo-300 transition text-[11px] flex items-center gap-1">
+            <i data-lucide="copy" class="w-3 h-3"></i>
+            <span>Copy Subject</span>
+          </button>
+        </div>
+        <div id="email-modal-subject" class="p-2.5 rounded-lg bg-slate-950 border border-slate-800 text-xs font-mono text-slate-200 select-all">
+          --
+        </div>
+      </div>
+
+      <!-- Draft Body Content -->
+      <div class="space-y-1.5">
+        <div class="flex items-center justify-between text-xs text-slate-400">
+          <span class="font-medium uppercase tracking-wider text-[10px]">Drafted Email Body</span>
+          <button id="btn-copy-body" class="text-indigo-400 hover:text-indigo-300 transition text-[11px] flex items-center gap-1">
+            <i data-lucide="copy" class="w-3 h-3"></i>
+            <span>Copy Full Email</span>
+          </button>
+        </div>
+        <pre id="email-modal-body" class="p-3.5 rounded-xl bg-slate-950 border border-slate-800 text-xs font-mono text-slate-200 whitespace-pre-wrap leading-relaxed max-h-72 overflow-y-auto select-all shadow-inner"></pre>
+      </div>
+
+      <!-- Batch Switcher Toolbar (Visible when batch loaded) -->
+      <div id="email-modal-batch-nav" class="hidden items-center justify-between p-2 rounded-lg bg-slate-950/80 border border-slate-800 text-xs">
+        <button id="btn-batch-prev" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1">
+          <i data-lucide="chevron-left" class="w-3 h-3"></i> Prev Match
+        </button>
+        <span id="batch-progress-label" class="font-mono text-slate-400 text-[11px]">Match 1 of 5</span>
+        <button id="btn-batch-next" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1">
+          Next Match <i data-lucide="chevron-right" class="w-3 h-3"></i>
+        </button>
+      </div>
+
+      <!-- Modal Footer -->
+      <div class="flex items-center justify-between pt-2 border-t border-slate-800 flex-wrap gap-2">
+        <span class="text-[11px] text-slate-400 font-mono flex items-center gap-1.5">
+          <i data-lucide="mail-check" class="w-3.5 h-3.5 text-emerald-400"></i>
+          <span>Target Inbox: <strong class="text-emerald-400 font-mono">hackathon-demo@outlook.com</strong></span>
+        </span>
+        <div class="flex items-center gap-2">
+          <button id="btn-modal-send-alert" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition flex items-center gap-1.5 shadow-md shadow-emerald-600/30">
+            <i data-lucide="send" class="w-3.5 h-3.5"></i>
+            <span>Send Alert to Outlook</span>
+          </button>
+          <button id="btn-modal-copy-all" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition flex items-center gap-1.5 shadow-md shadow-indigo-600/30">
+            <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+            <span>Copy Entire Email</span>
+          </button>
+          <button id="btn-modal-close" class="px-3.5 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 transition">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Application Logic -->
+  <script src="/app.js"></script>
+</body>
+</html>
