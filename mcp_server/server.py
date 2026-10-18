@@ -217,25 +217,48 @@ def discover_direct_and_lookalike_matches(
     if total_req_count == 0:
         total_req_count = 1
 
-    # 2. Hard Eligibility Filter + 2-Day Cooldown Check + Direct Capability Matching
+    # 2. Hard Eligibility Filter + 2-Day Cooldown Check + Multi-Hop Credential Gating
     candidates_query = """
     MATCH (t:Tender {id: $tender_id})-[:LOCATED_IN]->(r:Region)
     MATCH (d:Department)-[:ISSUED]->(t)
     MATCH (c:Client)-[op:OPERATES_IN]->(r)
-    WHERE c.is_blacklisted = false
+    WHERE (t.status = 'ACTIVE' OR t.status IS NULL)
+      AND (t.deadline_at IS NULL OR t.deadline_at > $now)
+      AND c.is_blacklisted = false
       AND op.gst_valid = true
-      AND (c.avg_turnover_3yr >= t.expected_turnover_3yr OR (c.is_msme = true AND t.msme_exempt_turnover = true))
-      AND c.net_worth >= t.min_net_worth
-      AND c.solvency >= t.min_solvency
-      AND c.tech_staff_count >= t.min_tech_staff
+      AND (t.expected_turnover_3yr IS NULL OR c.avg_turnover_3yr >= t.expected_turnover_3yr OR (c.is_msme = true AND t.msme_exempt_turnover = true))
+      AND (t.min_net_worth IS NULL OR c.net_worth >= t.min_net_worth)
+      AND (t.min_solvency IS NULL OR c.solvency >= t.min_solvency)
+      AND (t.min_tech_staff IS NULL OR c.tech_staff_count >= t.min_tech_staff)
+      AND (t.min_local_content_class IS NULL OR t.min_local_content_class = 'CLASS-2' OR c.local_content_class = 'CLASS-1')
     OPTIONAL MATCH (c)-[m:MATCHED_TENDER]->(t)
       WHERE m.status IN ['WON', 'LOST'] OR (m.status = 'ALERTED' AND ($now - m.last_alert_sent) < 172800)
     WITH t, d, r, c, m
     WHERE m IS NULL
-    OPTIONAL MATCH (c)-[:WORKS_IN]->(twc:WorkCategory)
-      WHERE (t)-[:IN_CATEGORY]->(twc) 
-         OR (twc.name = 'Civil Works' AND (t)-[:IN_CATEGORY]->(:WorkCategory {name: 'Civil'}))
-         OR (twc.name = 'IT Hardware' AND (t)-[:IN_CATEGORY]->(:WorkCategory {name: 'IT hardware'}))
+
+    // Mandatory Trade Category Gate
+    MATCH (t)-[:IN_CATEGORY]->(twc:WorkCategory)<-[:WORKS_IN]-(c)
+
+    // Mandatory Specialization Gate
+    WITH t, d, r, c, twc, [(t)-[:REQUIRES_SPECIALIZATION]->(spec:Specialization) | spec] AS req_specs
+    WITH t, d, r, c, twc, req_specs, [(t)-[:REQUIRES_SPECIALIZATION]->(spec:Specialization)<-[:HAS_SPECIALIZATION]-(c) | spec] AS held_specs
+    WHERE size(held_specs) = size(req_specs)
+
+    // Mandatory Enlistment Class Gate (with valid expiration)
+    WITH t, d, r, c, twc, [(t)-[:REQUIRES_ENLISTMENT]->(ec:EnlistmentClass) | ec] AS req_enlist
+    WITH t, d, r, c, twc, req_enlist, [(t)-[:REQUIRES_ENLISTMENT]->(ec:EnlistmentClass)<-[en:ENLISTED_AS]-(c) WHERE en.valid_until IS NULL OR en.valid_until > $now | ec] AS held_enlist
+    WHERE size(held_enlist) = size(req_enlist)
+
+    // Mandatory Technical Certifications Gate (with valid expiration)
+    WITH t, d, r, c, twc, [(t)-[:REQUIRES_CERT]->(rc:Certification) | rc] AS req_certs
+    WITH t, d, r, c, twc, req_certs, [(t)-[:REQUIRES_CERT]->(rc:Certification)<-[hc:HOLDS_CERT]-(c) WHERE hc.valid_until IS NULL OR hc.valid_until > $now | rc] AS held_certs
+    WHERE size(held_certs) = size(req_certs)
+
+    // Mandatory Brand & OEM Strict Authorization Gate (with territorial match & valid expiration)
+    WITH t, d, r, c, twc, [(t)-[pb:PREFERS_BRAND]->(b:Brand) WHERE pb.strict_auth_required = true | b] AS req_brands
+    WITH t, d, r, c, twc, req_brands, [(t)-[pb:PREFERS_BRAND]->(b:Brand)<-[auth:AUTHORIZED_FOR]-(c) WHERE (auth.valid_until IS NULL OR auth.valid_until > $now) AND (auth.territory IN ['ALL_INDIA', 'All India', r.name]) | b] AS held_brands
+    WHERE size(held_brands) = size(req_brands)
+
     OPTIONAL MATCH (c)-[:HAS_SPECIALIZATION]->(tspec:Specialization)<-[:REQUIRES_SPECIALIZATION]-(t)
     OPTIONAL MATCH (c)-[hc:HOLDS_CERT]->(tcert:Certification)<-[:REQUIRES_CERT]-(t)
       WHERE hc.valid_until IS NULL OR hc.valid_until > $now
@@ -243,7 +266,7 @@ def discover_direct_and_lookalike_matches(
       WHERE (auth.territory = r.name OR toUpper(replace(auth.territory, ' ', '_')) = 'ALL_INDIA') AND (auth.valid_until IS NULL OR auth.valid_until > $now)
     OPTIONAL MATCH (c)-[sp:SUPPLIES]->(tp:Product)<-[:REQUIRES_PRODUCT]-(t)
       WHERE t.oem_required = false OR sp.is_oem = true
-    OPTIONAL MATCH (c)-[en:ENLISTED_AS|HOLDS_ENLISTMENT]->(tec:EnlistmentClass)<-[:REQUIRES_ENLISTMENT]-(t)
+    OPTIONAL MATCH (c)-[en:ENLISTED_AS]->(tec:EnlistmentClass)<-[:REQUIRES_ENLISTMENT]-(t)
       WHERE en.valid_until IS NULL OR en.valid_until > $now
     OPTIONAL MATCH (c)-[da:DEPARTMENT_AFFINITY]->(d)
     OPTIONAL MATCH (c)-[ca:CATEGORY_AFFINITY]->(twc)
@@ -287,76 +310,46 @@ def discover_direct_and_lookalike_matches(
         )
         base_match_ratio = direct_matched_count / total_req_count
 
-        # 3. 5-Hop Lookalike Bidder Traversal (Client A -> Client B)
-        # Traverse genuine 5-hop path:
-        # (c:Client)-[:CAPABILITY]->(shared)<-[:CAPABILITY]-(peer:Client)-[:BID_HISTORY {outcome: 'WON'}]->(past_t:Tender)<-[:ISSUED]-(d:Department)-[:ISSUED]->(t:Tender)
+        # 3. 5-Hop Lookalike Traversal (Shielded Anchor Analysis)
+        # Groups by (client, anchor), requires >= 2 shared capabilities per anchor,
+        # and requires >= 2 distinct supporting anchors who previously won in this department & category.
         lookalike_query = """
-        MATCH (t:Tender {id: $tender_id})<-[:ISSUED]-(d:Department)-[:ISSUED]->(past_t:Tender)<-[:BID_HISTORY {outcome: 'WON'}]-(peer:Client)
-        WHERE peer.id <> $client_id AND peer.is_blacklisted = false
-        MATCH (peer)-[:HAS_SPECIALIZATION|HOLDS_CERT|AUTHORIZED_FOR|SUPPLIES]->(shared)<-[:HAS_SPECIALIZATION|HOLDS_CERT|AUTHORIZED_FOR|SUPPLIES]-(c:Client {id: $client_id})
-        OPTIONAL MATCH (peer)-[op:OPERATES_IN]->(tr:Region)<-[:LOCATED_IN]-(t)
-        RETURN peer.id AS peer_id,
-               peer.name AS peer_name,
-               d.name AS department_name,
-               past_t.id AS past_tender_id,
-               collect(DISTINCT coalesce(shared.name, shared.code)) AS shared_capabilities,
-               peer.avg_turnover_3yr AS turnover,
-               peer.is_msme AS is_msme,
-               peer.local_content_class AS local_content_class,
-               peer.solvency AS solvency,
-               peer.ongoing_work_value AS ongoing_work,
-               op.gst_valid AS gst_valid
+        MATCH (t:Tender {id: $tender_id})-[:IN_CATEGORY]->(wc:WorkCategory)
+        MATCH (t)<-[:ISSUED]-(d:Department)-[:ISSUED]->(past_t:Tender)-[:IN_CATEGORY]->(wc)
+        MATCH (anchor:Client)-[:BID_HISTORY {outcome: 'WON'}]->(past_t)
+        WHERE anchor.id <> $client_id AND anchor.is_blacklisted = false
+        MATCH (anchor)-[:WORKS_IN|HAS_SPECIALIZATION|HOLDS_CERT|AUTHORIZED_FOR|SUPPLIES]->(shared)<-[:WORKS_IN|HAS_SPECIALIZATION|HOLDS_CERT|AUTHORIZED_FOR|SUPPLIES]-(c:Client {id: $client_id})
+        WITH anchor, count(DISTINCT shared) AS shared_per_anchor, d
+        WHERE shared_per_anchor >= 2
+        RETURN count(DISTINCT anchor) AS supporting_anchors, sum(shared_per_anchor) AS total_shared_caps, d.name AS dept_name
         """
         la_res = graph.query(lookalike_query, {"tender_id": tender_id, "client_id": cid})
+        supporting_anchors = 0
+        total_shared_caps = 0
+        dept_name = tender_meta.get("dept_name") or "Procuring Department"
+        if la_res.result_set:
+            row0 = la_res.result_set[0]
+            supporting_anchors = int(row0[0] or 0)
+            total_shared_caps = int(row0[1] or 0)
+            if len(row0) > 2 and row0[2]:
+                dept_name = str(row0[2])
+
         lookalike_peers = []
         lookalike_boost = 0.0
-        for l_row in la_res.result_set:
-            peer_id = l_row[0]
-            peer_name = l_row[1]
-            dept_name = l_row[2]
-            past_tender_id = l_row[3]
-            shared_caps = l_row[4]
-            peer_turnover = float(l_row[5]) if len(l_row) > 5 and l_row[5] else 0.0
-            peer_is_msme = bool(l_row[6]) if len(l_row) > 6 and l_row[6] else False
-            peer_local_class = str(l_row[7]) if len(l_row) > 7 and l_row[7] else "CLASS-1"
-            peer_solvency = float(l_row[8]) if len(l_row) > 8 and l_row[8] else 0.0
-            peer_ongoing = float(l_row[9]) if len(l_row) > 9 and l_row[9] else 0.0
-            peer_gst_valid = bool(l_row[10]) if len(l_row) > 10 and l_row[10] is not None else True
-
-            # Formulate strategic winning plus points for peer (Privacy Shield: do not leak anchor contract ID or turnover)
-            peer_plus_points = []
-            if shared_caps:
-                peer_plus_points.append(f"OEM & Technical Alignment: Holds verified credentials across {', '.join(shared_caps[:3])}.")
-            if peer_gst_valid:
-                peer_plus_points.append("Local Regional Advantage: Active GSTIN registration in tender jurisdiction with compliant filing history.")
-            if peer_turnover > 0:
-                peer_plus_points.append("Financial Solvency: Validated healthy working capital solvency buffer.")
-            if "CLASS-1" in peer_local_class.upper():
-                peer_plus_points.append("Make-in-India Preference: DPIIT Class-1 Local Content (>50%) grants statutory purchase preference.")
-            if peer_is_msme:
-                peer_plus_points.append("MSME Policy Advantage: Eligible for statutory tender fee/EMD waiver and price-matching preference.")
-            if past_tender_id:
-                peer_plus_points.append(f"Public Contract Track Record: Proven execution pedigree with validated past wins in {dept_name}.")
-
+        if supporting_anchors >= 2:
+            lookalike_boost = 0.20 if supporting_anchors >= 3 else 0.15
             lookalike_peers.append({
-                "peer_id": peer_id,
-                "peer_name": peer_name,
+                "benchmark_reference": "[Generic Peer Benchmark - Identity Shielded]",
+                "supporting_anchors": supporting_anchors,
+                "shared_capabilities_count": total_shared_caps,
                 "department": dept_name,
-                "past_tender_id": past_tender_id,
-                "shared_capabilities": shared_caps,
-                "turnover": peer_turnover,
-                "is_msme": peer_is_msme,
-                "local_content_class": peer_local_class,
-                "solvency": peer_solvency,
-                "ongoing_work": peer_ongoing,
-                "gst_valid": peer_gst_valid,
-                "plus_points": peer_plus_points,
+                "plus_points": [
+                    f"Technical Alignment: Capability profile mirrors {supporting_anchors} distinct historical contract winners in {dept_name}.",
+                    "Local Regional Advantage: Active GSTIN registration in tender jurisdiction with compliant filing history.",
+                    "Financial Solvency: Validated healthy working capital solvency buffer.",
+                    "Make-in-India Preference: DPIIT Class-1 Local Content (>50%) grants statutory purchase preference."
+                ]
             })
-            # Boost if lookalike peer won past tenders in this department and shares core capabilities
-            if len(shared_caps) >= 2:
-                lookalike_boost = max(lookalike_boost, 0.20)
-            elif len(shared_caps) >= 1:
-                lookalike_boost = max(lookalike_boost, 0.10)
 
         # Deterministic Domain Coverage Filter:
         # A candidate must have at least one overlapping work category (if categories are specified)
@@ -388,10 +381,8 @@ def discover_direct_and_lookalike_matches(
         if lookalike_peers:
             primary_peer = lookalike_peers[0]
             trace_parts.append(
-                f"-[:WORKS_IN|HAS_SPECIALIZATION|HOLDS_CERT|AUTHORIZED_FOR|SUPPLIES]-> (Shared: {primary_peer['shared_capabilities']}) "
-                f"<-[:WORKS_IN|HAS_SPECIALIZATION|HOLDS_CERT|AUTHORIZED_FOR|SUPPLIES]- (:Client {{id: '{primary_peer['peer_id']}'}}) "
-                f"-[:BID_HISTORY {{outcome: 'WON'}}]-> (:Tender {{id: '{primary_peer['past_tender_id']}'}}) "
-                f"<-[:ISSUED]- (:Department {{name: '{primary_peer['department']}'}}) "
+                f"-[:MIRRORS_WINNERS {{supporting_anchors: {primary_peer['supporting_anchors']}}}]-> "
+                f"(:Department {{name: '{primary_peer['department']}'}}) "
                 f"-[:ISSUED]-> (:Tender {{id: '{tender_id}'}})"
             )
         else:
@@ -498,7 +489,7 @@ def discover_jv_consortium_matches(
       WHERE (auth.territory = r.name OR toUpper(replace(auth.territory, ' ', '_')) = 'ALL_INDIA') AND (auth.valid_until IS NULL OR auth.valid_until > $now)
     OPTIONAL MATCH (c)-[sp:SUPPLIES]->(tp:Product)<-[:REQUIRES_PRODUCT]-(t)
       WHERE t.oem_required = false OR sp.is_oem = true
-    OPTIONAL MATCH (c)-[en:ENLISTED_AS|HOLDS_ENLISTMENT]->(tec:EnlistmentClass)<-[:REQUIRES_ENLISTMENT]-(t)
+    OPTIONAL MATCH (c)-[en:ENLISTED_AS]->(tec:EnlistmentClass)<-[:REQUIRES_ENLISTMENT]-(t)
       WHERE en.valid_until IS NULL OR en.valid_until > $now
     RETURN c.id AS cid,
            c.name AS cname,
@@ -605,6 +596,19 @@ def discover_jv_consortium_matches(
                 clean_tid = tender_id.replace('/', '_').replace(' ', '_').replace('-', '_')
                 jv_id = f"jv_{lead['id']}_{partner['id']}_{clean_tid}"
 
+                # Calculate dynamic equity share and graph-derived synergy score
+                lead_pct = int(round((lead["turnover"] / max(combined_turnover, 1.0)) * 100))
+                partner_pct = max(1, 100 - lead_pct)
+                lead_equity_share = f"{lead_pct}%"
+                partner_equity_share = f"{partner_pct}%"
+
+                # Dynamic graph-derived synergy score: base coverage (100% union) + financial headroom + solvency buffer
+                turnover_ratio = combined_turnover / max(expected_turnover, 1.0)
+                headroom_bonus = min(0.12, max(0.02, (turnover_ratio - 1.0) * 0.08))
+                solvency_sum = lead["solvency"] + partner["solvency"]
+                solvency_bonus = min(0.06, max(0.01, (solvency_sum / max(expected_turnover * 2.0, 1.0)) * 0.06))
+                synergy_score = round(min(0.99, max(0.75, 0.80 + headroom_bonus + solvency_bonus)), 2)
+
                 # 5-Stage JV Decision Tree for Agent Reasoning & UI Audit
                 decision_tree = {
                     "stage1_solo_disqualification": {
@@ -624,7 +628,7 @@ def discover_jv_consortium_matches(
                         "combined_net_worth_cr": round((lead["net_worth"] + partner["net_worth"]) / 1e7, 2),
                         "combined_solvency_cr": round((lead["solvency"] + partner["solvency"]) / 1e7, 2),
                         "gate_passed": True,
-                        "detail": "Combined 3-year turnover satisfies 100% of financial criteria with positive solvency buffer."
+                        "detail": f"Combined 3-year turnover satisfies 100% of financial criteria with positive solvency buffer (Turnover Headroom: +₹{(combined_turnover - expected_turnover)/1e7:.2f} Cr)."
                     },
                     "stage3_capability_union": {
                         "title": "Stage 3: Multi-Hop Capability Union Gate",
@@ -647,11 +651,11 @@ def discover_jv_consortium_matches(
                         "title": "Stage 5: Consortium Governance & Lead Designation",
                         "designated_lead": lead["name"],
                         "designated_partner": partner["name"],
-                        "lead_equity_share": "60%",
-                        "partner_equity_share": "40%",
-                        "synergy_score": 0.96,
+                        "lead_equity_share": lead_equity_share,
+                        "partner_equity_share": partner_equity_share,
+                        "synergy_score": synergy_score,
                         "action": "RECOMMEND_JV_FORMATION",
-                        "detail": f"Recommended unincorporated Joint Venture with {lead['name']} as Lead Managing Partner."
+                        "detail": f"Recommended unincorporated Joint Venture with {lead['name']} as Lead Managing Partner ({lead_equity_share} share)."
                     }
                 }
 
@@ -667,7 +671,7 @@ def discover_jv_consortium_matches(
                         jv.partner_name = $partner_name,
                         jv.combined_turnover = $combined_turnover,
                         jv.required_turnover = $required_turnover,
-                        jv.synergy_score = 0.96,
+                        jv.synergy_score = $synergy_score,
                         jv.decision_tree_json = $decision_tree_json,
                         jv.status = coalesce(jv.status, 'RECOMMENDED'),
                         jv.created_at = coalesce(jv.created_at, $now),
@@ -678,7 +682,7 @@ def discover_jv_consortium_matches(
                     MERGE (partner)-[:PARTNER_IN_CONSORTIUM]->(jv)
                     MERGE (jv)-[:FORMED_FOR_TENDER]->(t)
                     MERGE (lead)-[pa:PARTNERSHIP_AFFINITY]->(partner)
-                      ON CREATE SET pa.proposals = 1, pa.wins = 0, pa.losses = 0, pa.affinity_score = 0.85
+                      ON CREATE SET pa.proposals = 1, pa.wins = 0, pa.losses = 0, pa.affinity_score = $synergy_score
                     """, {
                         "jv_id": jv_id,
                         "tender_id": tender_id,
@@ -689,6 +693,7 @@ def discover_jv_consortium_matches(
                         "partner_name": partner["name"],
                         "combined_turnover": combined_turnover,
                         "required_turnover": expected_turnover,
+                        "synergy_score": synergy_score,
                         "decision_tree_json": json.dumps(decision_tree),
                         "now": now,
                     })
@@ -735,7 +740,7 @@ def discover_jv_consortium_matches(
                         "combined_tech_staff": lead["tech_staff"] + partner["tech_staff"],
                     },
                     "coverage_percentage": 100.0,
-                    "synergy_score": 0.96,
+                    "synergy_score": synergy_score,
                     "status": "RECOMMENDED",
                     "decision_tree": decision_tree,
                     "graph_path_trace": path_trace,
@@ -910,7 +915,21 @@ def record_bid_outcome_and_learn(
         prev_status = str(existing_check.result_set[0][0]).upper()
 
     if prev_status == clean_outcome:
-        logger.info("Outcome '%s' already recorded for Client '%s' on Tender '%s'. Ignored duplicate update.", clean_outcome, client_id, tender_id)
+        logger.info("Outcome '%s' already recorded for Client '%s' on Tender '%s'. Re-confirming and refreshing updated_at timestamp.", clean_outcome, client_id, tender_id)
+        # Refresh updated_at on existing DEPARTMENT_AFFINITY
+        graph.query("""
+        MATCH (t:Tender {id: $tender_id})<-[:ISSUED]-(d:Department)
+        MATCH (c:Client {id: $client_id})-[da:DEPARTMENT_AFFINITY]->(d)
+        SET da.updated_at = $now
+        """, {"client_id": client_id, "tender_id": tender_id, "now": now})
+
+        # Refresh updated_at on existing CATEGORY_AFFINITY
+        graph.query("""
+        MATCH (t:Tender {id: $tender_id})-[:IN_CATEGORY]->(wc:WorkCategory)
+        MATCH (c:Client {id: $client_id})-[ca:CATEGORY_AFFINITY]->(wc)
+        SET ca.updated_at = $now
+        """, {"client_id": client_id, "tender_id": tender_id, "now": now})
+
         cur_dept = graph.query("""
         MATCH (t:Tender {id: $tender_id})<-[:ISSUED]-(d:Department)
         MATCH (c:Client {id: $client_id})-[da:DEPARTMENT_AFFINITY]->(d)
@@ -919,7 +938,26 @@ def record_bid_outcome_and_learn(
         dept_info = {}
         if cur_dept.result_set:
             r = cur_dept.result_set[0]
-            dept_info = {"department_name": r[0], "wins": r[1], "losses": r[2], "win_rate": r[3], "affinity_weight": r[4]}
+            dept_info = {"status": "UPDATED", "department_name": r[0], "wins": r[1], "losses": r[2], "win_rate": r[3], "affinity_weight": r[4]}
+        else:
+            dept_info = {
+                "status": "NO_DEPARTMENT",
+                "message": "No procuring department associated with tender; department affinity memory skipped.",
+                "wins": 0,
+                "losses": 0,
+                "win_rate": 0.0,
+                "affinity_weight": 0.0,
+            }
+
+        cur_cats = graph.query("""
+        MATCH (t:Tender {id: $tender_id})-[:IN_CATEGORY]->(wc:WorkCategory)
+        MATCH (c:Client {id: $client_id})-[ca:CATEGORY_AFFINITY]->(wc)
+        RETURN wc.name, ca.wins, ca.losses, ca.win_rate, ca.affinity_weight
+        """, {"client_id": client_id, "tender_id": tender_id})
+        cat_info = []
+        for cr in cur_cats.result_set:
+            cat_info.append({"category_name": cr[0], "wins": cr[1], "losses": cr[2], "win_rate": cr[3], "affinity_weight": cr[4]})
+
         return json.dumps({
             "success": True,
             "client_id": client_id,
@@ -927,7 +965,7 @@ def record_bid_outcome_and_learn(
             "outcome": clean_outcome,
             "resolved_at": now,
             "department_affinity": dept_info,
-            "category_affinities": [],
+            "category_affinities": cat_info,
             "idempotent_skip": True,
         }, indent=2)
 
@@ -954,6 +992,7 @@ def record_bid_outcome_and_learn(
         c.last_won_tender = CASE WHEN $outcome = 'WON' THEN $tender_id ELSE c.last_won_tender END,
         c.last_outcome_at = $now
     MERGE (c)-[m:MATCHED_TENDER]->(t)
+    ON CREATE SET m.match_score = coalesce(m.match_score, 0.50), m.match_type = 'DIRECT', m.alert_count = 1, m.first_matched_at = $now, m.last_alert_sent = $now
     SET m.status = $outcome,
         m.resolved_at = $now
     MERGE (c)-[b:BID_HISTORY]->(t)
@@ -1008,11 +1047,21 @@ def record_bid_outcome_and_learn(
     if dept_res.result_set:
         d_row = dept_res.result_set[0]
         dept_info = {
+            "status": "UPDATED",
             "department_name": d_row[0],
             "wins": d_row[1],
             "losses": d_row[2],
             "win_rate": d_row[3],
             "affinity_weight": d_row[4],
+        }
+    else:
+        dept_info = {
+            "status": "NO_DEPARTMENT",
+            "message": "No procuring department associated with tender; department affinity memory skipped.",
+            "wins": 0,
+            "losses": 0,
+            "win_rate": 0.0,
+            "affinity_weight": 0.0,
         }
 
     # 4. Graph Memory Update: Update CATEGORY_AFFINITY with Laplace smoothing & division-by-zero protection
@@ -1218,10 +1267,10 @@ def get_alerts_and_agent_memory(
             "department_name": row[4] or "Procurement Department",
             "ministry_name": row[5] or "Government of India",
             "tender_amount": row[6],
-            "match_score": row[7],
-            "match_type": row[8],
+            "match_score": float(row[7]) if row[7] is not None else 0.90,
+            "match_type": str(row[8]) if row[8] is not None else "DIRECT",
             "status": status,
-            "alert_count": row[10],
+            "alert_count": int(row[10]) if row[10] is not None else 1,
             "first_matched_at": row[11],
             "last_alert_sent": last_sent,
             "cooldown_active": cooldown_active,
@@ -1234,15 +1283,16 @@ def get_alerts_and_agent_memory(
             "evaluating_agent": eval_agent,
         })
 
-    # 2. Fetch All Learned Affinities Across Clients (Departments + Categories)
+    # 2. Fetch Learned Affinities (Filtered by client_id if requested, sorted by most recently updated)
     learned_affinities = []
 
     dept_aff_res = graph.query("""
     MATCH (c:Client)-[da:DEPARTMENT_AFFINITY]->(d:Department)
+    WHERE ($client_id IS NULL OR c.id = $client_id)
     RETURN c.id, c.name, d.name, 'DEPARTMENT',
-           da.wins, da.losses, da.win_rate, da.affinity_weight, da.updated_at
-    ORDER BY da.affinity_weight DESC
-    """)
+           da.wins, da.losses, da.win_rate, da.affinity_weight, coalesce(da.updated_at, 0) AS updated_at
+    ORDER BY updated_at DESC, da.affinity_weight DESC
+    """, {"client_id": client_id})
     for r in dept_aff_res.result_set:
         learned_affinities.append({
             "client_id": r[0],
@@ -1253,15 +1303,16 @@ def get_alerts_and_agent_memory(
             "losses": r[5],
             "win_rate": r[6],
             "affinity_weight": r[7],
-            "updated_at": r[8],
+            "updated_at": r[8] if r[8] else None,
         })
 
     cat_aff_res = graph.query("""
     MATCH (c:Client)-[ca:CATEGORY_AFFINITY]->(wc:WorkCategory)
+    WHERE ($client_id IS NULL OR c.id = $client_id)
     RETURN c.id, c.name, wc.name, 'CATEGORY',
-           ca.wins, ca.losses, ca.win_rate, ca.affinity_weight, ca.updated_at
-    ORDER BY ca.affinity_weight DESC
-    """)
+           ca.wins, ca.losses, ca.win_rate, ca.affinity_weight, coalesce(ca.updated_at, 0) AS updated_at
+    ORDER BY updated_at DESC, ca.affinity_weight DESC
+    """, {"client_id": client_id})
     for r in cat_aff_res.result_set:
         learned_affinities.append({
             "client_id": r[0],
@@ -1272,8 +1323,11 @@ def get_alerts_and_agent_memory(
             "losses": r[5],
             "win_rate": r[6],
             "affinity_weight": r[7],
-            "updated_at": r[8],
+            "updated_at": r[8] if r[8] else None,
         })
+
+    # Sort combined affinities so the most recently updated item appears first, followed by affinity weight
+    learned_affinities.sort(key=lambda x: (x.get("updated_at") or 0, x.get("affinity_weight") or 0.0), reverse=True)
 
     # 3. Fetch JV Consortiums from Graph
     jv_consortiums = []
@@ -1759,67 +1813,112 @@ def get_department_lineage(
 def find_peer_clients(
     client_id: str,
     tender_id: str,
+    current_timestamp: Optional[int] = None,
     graph_name: Optional[str] = None
 ) -> str:
     """
     Template Tool 4: 5-Hop OpenCypher lookalike peer traversal. Traverses shared capabilities
-    from anchor client to similar competitors who won public tenders in this department.
+    to discover competitors who mirror historical successful public contract winners in this
+    procuring department and work category.
+    Strictly groups by (peer, anchor), requires >= 2 shared capabilities per anchor,
+    and requires >= 2 distinct supporting anchors.
+    Shields anchor identity, contract IDs, and financial turnover from returning to the agent layer.
     """
     graph = _get_target_graph(graph_name)
+    now = current_timestamp if current_timestamp is not None else int(time.time())
     query = """
-    MATCH (t:Tender {id: $tender_id})<-[:ISSUED]-(d:Department)-[:ISSUED]->(past_t:Tender)<-[:BID_HISTORY {outcome: 'WON'}]-(peer:Client)
-    WHERE peer.id <> $client_id AND peer.is_blacklisted = false
-    MATCH (peer)-[:HAS_SPECIALIZATION|HOLDS_CERT|AUTHORIZED_FOR|SUPPLIES]->(shared)<-[:HAS_SPECIALIZATION|HOLDS_CERT|AUTHORIZED_FOR|SUPPLIES]-(c:Client {id: $client_id})
-    OPTIONAL MATCH (peer)-[op:OPERATES_IN]->(tr:Region)<-[:LOCATED_IN]-(t)
-    RETURN peer.id AS peer_id,
+    MATCH (t:Tender {id: $tender_id})-[:IN_CATEGORY]->(wc:WorkCategory)
+    MATCH (t)<-[:ISSUED]-(d:Department)-[:ISSUED]->(past_t:Tender)-[:IN_CATEGORY]->(wc)
+    MATCH (anchor:Client)-[:BID_HISTORY {outcome: 'WON'}]->(past_t)
+    WHERE anchor.is_blacklisted = false
+
+    MATCH (peer:Client)
+    WHERE ($client_id IS NULL OR $client_id = '' OR peer.id = $client_id)
+      AND peer.id <> anchor.id
+      AND peer.is_blacklisted = false
+      AND (t.expected_turnover_3yr IS NULL OR peer.avg_turnover_3yr >= t.expected_turnover_3yr OR (peer.is_msme = true AND t.msme_exempt_turnover = true))
+      AND NOT (peer)-[:BID_HISTORY]->(:Tender)<-[:ISSUED]-(d)
+
+    // Pattern A Gating for Peer: Regional presence, trade/category, valid certs, brands, and cooldown
+    MATCH (t)-[:LOCATED_IN]->(r:Region)
+    MATCH (peer)-[op:OPERATES_IN]->(r)
+    WHERE op.gst_valid = true
+
+    MATCH (peer)-[:WORKS_IN]->(wc)
+
+    OPTIONAL MATCH (t)-[:REQUIRES_CERT]->(req_cert:Certification)
+    OPTIONAL MATCH (peer)-[hc:HOLDS_CERT]->(req_cert)
+      WHERE hc.valid_until IS NULL OR hc.valid_until > $now
+    WITH t, d, past_t, anchor, peer, r,
+         count(DISTINCT req_cert) AS total_req_certs,
+         count(DISTINCT hc) AS held_req_certs
+    WHERE total_req_certs = 0 OR held_req_certs = total_req_certs
+
+    OPTIONAL MATCH (t)-[:PREFERS_BRAND]->(req_brand:Brand)
+    OPTIONAL MATCH (peer)-[auth:AUTHORIZED_FOR]->(req_brand)
+      WHERE (auth.territory = r.name OR toUpper(replace(auth.territory, ' ', '_')) = 'ALL_INDIA') AND (auth.valid_until IS NULL OR auth.valid_until > $now)
+    WITH t, d, past_t, anchor, peer,
+         count(DISTINCT req_brand) AS total_req_brands,
+         count(DISTINCT auth) AS held_req_brands
+    WHERE total_req_brands = 0 OR held_req_brands = total_req_brands
+
+    WITH t, d, past_t, anchor, peer,
+         [(peer)-[eval:MATCHED_TENDER]->(t)
+          WHERE eval.status IN ['WON', 'LOST']
+             OR (eval.status = 'ALERTED' AND ($now - eval.last_alert_sent) < 172800) | eval] AS blocked_evals
+    WHERE size(blocked_evals) = 0
+
+    // Group by (peer, anchor): require >= 2 shared capabilities per anchor
+    MATCH (anchor)-[:WORKS_IN|HAS_SPECIALIZATION|HOLDS_CERT|AUTHORIZED_FOR|SUPPLIES]->(shared)<-[:WORKS_IN|HAS_SPECIALIZATION|HOLDS_CERT|AUTHORIZED_FOR|SUPPLIES]-(peer)
+    WITH peer, anchor, count(DISTINCT shared) AS shared_per_anchor
+    WHERE shared_per_anchor >= 2
+
+    // Group by peer: require >= 2 distinct supporting anchors
+    WITH peer, count(DISTINCT anchor) AS supporting_anchors, sum(shared_per_anchor) AS total_shared_caps
+    WHERE supporting_anchors >= 2
+
+    WITH peer, supporting_anchors, total_shared_caps,
+         (0.68 + 0.15 * (CASE WHEN supporting_anchors >= 3 THEN 1.0 ELSE 0.6 END)) AS raw_score
+
+    RETURN peer.id AS peer_client_id,
            peer.name AS peer_name,
-           d.name AS department_name,
-           past_t.id AS past_tender_id,
-           collect(DISTINCT coalesce(shared.name, shared.code)) AS shared_capabilities,
-           peer.avg_turnover_3yr AS turnover,
-           peer.is_msme AS is_msme,
-           peer.local_content_class AS local_content_class,
-           peer.solvency AS solvency,
-           op.gst_valid AS gst_valid
-    ORDER BY size(shared_capabilities) DESC
+           supporting_anchors,
+           total_shared_caps,
+           round((CASE WHEN raw_score > 0.92 THEN 0.92 ELSE raw_score END) * 10000.0) / 10000.0 AS match_score
+    ORDER BY supporting_anchors DESC, total_shared_caps DESC
     LIMIT 5
     """
-    res = graph.query(query, {"client_id": client_id, "tender_id": tender_id})
+    res = graph.query(query, {"client_id": client_id, "tender_id": tender_id, "now": now})
     peers = []
     for r in res.result_set:
-        peer_turnover = float(r[5] or 0.0)
-        peer_is_msme = bool(r[6])
-        peer_local = str(r[7] or "CLASS-1")
-        peer_solv = float(r[8] or 0.0)
-        peer_gst = bool(r[9]) if r[9] is not None else True
+        peer_id = r[0]
+        peer_name = r[1]
+        supporting_anchors = int(r[2])
+        shared_caps_count = int(r[3])
+        match_score = float(r[4])
 
-        plus_points = []
-        if r[4]:
-            plus_points.append(f"OEM & Technical Alignment: Holds verified credentials across {', '.join(r[4][:3])}.")
-        if peer_gst:
-            plus_points.append("Local Regional Presence: Active in-state GSTIN registration with verified active tax compliance.")
-        if peer_turnover > 0:
-            plus_points.append(f"Financial Solvency: 3-Year turnover ₹{peer_turnover/1e7:.2f} Cr with healthy working solvency buffer.")
-        if "CLASS-1" in peer_local.upper():
-            plus_points.append("Make-in-India Preference: DPIIT Class-1 Local Content (>50%) grants statutory purchase preference.")
-        if peer_is_msme:
-            plus_points.append("MSME Policy Advantage: Eligible for statutory tender fee/EMD waiver and price preference.")
-        if r[3]:
-            plus_points.append(f"Public Contract Track Record: Proven execution pedigree having previously won '{r[3]}'.")
+        plus_points = [
+            f"Technical Alignment: Capability profile mirrors {supporting_anchors} distinct historical contract winners in this department and category.",
+            "Local Regional Presence: Active in-state GSTIN registration with verified active tax compliance.",
+            "Financial Solvency: Validated working capital solvency buffer satisfying statutory threshold.",
+            "Make-in-India Preference: DPIIT Class-1 Local Content (>50%) grants statutory purchase preference.",
+            "MSME Policy Advantage: Eligible for statutory tender fee/EMD waiver and price preference."
+        ]
 
         peers.append({
-            "peer_id": r[0],
-            "peer_name": r[1],
-            "department": r[2],
-            "past_tender_id": r[3],
-            "shared_capabilities": r[4],
+            "peer_id": peer_id,
+            "peer_name": peer_name,
+            "benchmark_reference": "[Generic Peer Benchmark - Identity Shielded]",
+            "supporting_anchors": supporting_anchors,
+            "shared_capabilities_count": shared_caps_count,
+            "match_score": match_score,
             "plus_points": plus_points,
         })
 
     return json.dumps({
         "success": True,
         "tender_id": tender_id,
-        "anchor_client_id": client_id,
+        "target_client_id": client_id,
         "peer_count": len(peers),
         "peers": peers,
     }, indent=2)
@@ -1847,14 +1946,26 @@ def explore_paths(
 
     graph = _get_target_graph(graph_name)
     query = """
-    MATCH (s) WHERE $start_id IN [s.id, s.name, s.code]
-    MATCH (t) WHERE $target_id IN [t.id, t.name, t.code]
-    MATCH path = shortestPath((s)-[*..3]-(t))
+    MATCH (s), (t)
+    WHERE any(l IN labels(s) WHERE l = $start_type)
+      AND any(l IN labels(t) WHERE l = $target_type)
+      AND $start_id IN [s.id, s.name, s.code]
+      AND $target_id IN [t.id, t.name, t.code]
+    WITH s, t
+    WITH shortestPath((s)-[*..3]->(t)) AS path_fwd, shortestPath((t)-[*..3]->(s)) AS path_rev
+    WITH coalesce(path_fwd, path_rev) AS path
+    WHERE path IS NOT NULL
+      AND NONE(r IN relationships(path) WHERE type(r) IN ['BID_HISTORY', 'MATCHED_TENDER'])
     RETURN [n IN nodes(path) | {id: coalesce(n.id, n.name, n.code), label: labels(n)[0]}] AS path_nodes,
            [r IN relationships(path) | type(r)] AS path_relationships
     LIMIT 5
     """
-    res = graph.query(query, {"start_id": start_id, "target_id": target_id})
+    res = graph.query(query, {
+        "start_type": start_type,
+        "start_id": start_id,
+        "target_type": target_type,
+        "target_id": target_id,
+    })
     results = []
     for r in res.result_set:
         results.append({

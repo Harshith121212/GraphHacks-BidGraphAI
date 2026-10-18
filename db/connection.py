@@ -34,8 +34,28 @@ class FalkorDBConnection:
                     connection_kwargs["username"] = settings.FALKORDB_USERNAME
                 if settings.FALKORDB_PASSWORD:
                     connection_kwargs["password"] = settings.FALKORDB_PASSWORD
+
                 if settings.FALKORDB_SSL:
                     connection_kwargs["ssl"] = True
+                    # Default to strict verification first
+                    if getattr(settings, "FALKORDB_SSL_VERIFY", True):
+                        strict_kwargs = dict(connection_kwargs)
+                        strict_kwargs["ssl_cert_reqs"] = "required"
+                        strict_kwargs["ssl_check_hostname"] = True
+                        strict_kwargs["socket_connect_timeout"] = 3.0
+                        try:
+                            candidate_client = FalkorDB(**strict_kwargs)
+                            candidate_client.connection.ping()
+                            self._client = candidate_client
+                            return self._client
+                        except Exception as exc:
+                            import logging
+                            logger = logging.getLogger(__name__)
+                            logger.warning(
+                                "Strict TLS certificate/hostname verification failed for %s (%s). "
+                                "Falling back to encrypted TLS without hostname verification as documented in docs/SECURITY.md.",
+                                settings.FALKORDB_HOST, exc
+                            )
                     connection_kwargs["ssl_cert_reqs"] = None
                     connection_kwargs["ssl_check_hostname"] = False
 

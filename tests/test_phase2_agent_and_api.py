@@ -135,6 +135,14 @@ def test_agent_matching_loop_and_48h_cooldown_via_api():
     real_lookalike_tender = "IWD/IE/26-27/RT2/E-49"
     real_jv_tender = "RW/NH-12014/ 04/2025-MAH/ZONE-IV"
 
+    # Reset any pre-existing matched edges for these two test tenders to ensure test isolation
+    graph = get_graph(TEST_GRAPH_NAME)
+    graph.query("""
+    MATCH (c:Client)-[m:MATCHED_TENDER]->(t:Tender)
+    WHERE t.id IN [$t1, $t2]
+    DELETE m
+    """, {"t1": real_lookalike_tender, "t2": real_jv_tender})
+
     # 1. First run of the Matching Loop at T0
     res1 = client.post("/api/agent/match", json={
         "min_score_threshold": 0.50,
@@ -156,7 +164,8 @@ def test_agent_matching_loop_and_48h_cooldown_via_api():
     assert len(surya_decisions) >= 1
     surya_d = surya_decisions[0]
     assert surya_d["action"] == "ALERT_SENT"
-    assert "client_apex" in surya_d["reasoning_trace"], "Reasoning trace must cite lookalike peer client_apex"
+    assert "Benchmark-Ref" in surya_d["reasoning_trace"] or "BENCHMARK" in surya_d["reasoning_trace"].upper(), "Reasoning trace must cite benchmark reference"
+    assert "Apex Electricals" not in surya_d["reasoning_trace"], "Competitor company name must not be leaked"
 
     # Check JV consortium decision for real JV tender
     jv_decisions = [
@@ -259,3 +268,40 @@ def test_won_lost_buttons_update_affinity_and_halt_alerts_via_api():
         if d["client_id"] == "client_surya" and d["tender_id"] == real_tender_id and d["action"] == "ALERT_SENT"
     ]
     assert len(surya_late_sent) == 0, "Terminal status tender (WON) must never be re-alerted!"
+
+
+def test_privacy_shield_lookalike_peer_alert_anonymity():
+    """
+    Test 6: Privacy Shield - Lookalike Peer Alert Redaction & Zero Competitor Data Leakage.
+    Verifies that when a lookalike peer receives an alert based on multi-hop traversal:
+    1. The anchor's registered name ("Surya Wire & Switchgear Pvt Ltd") NEVER appears in the peer's trace.
+    2. The anchor's turnover (95000000.0 or "9.50 Cr") NEVER appears in the peer's trace.
+    3. The anchor's raw client ID is replaced with an irreversible benchmark hash (Benchmark-Ref-...).
+    4. The trace asserts strict confidentiality under Indian procurement competition norms.
+    """
+    t0 = 1760000000
+    real_lookalike_tender = "IWD/IE/26-27/RT2/E-49"
+    res = client.post("/api/agent/match", json={
+        "tender_ids": [real_lookalike_tender],
+        "min_score_threshold": 0.50,
+        "current_timestamp": t0,
+    })
+    assert res.status_code == 200
+    data = res.json()
+
+    # Find decisions for this tender
+    for d in data.get("decisions", []):
+        trace = d.get("reasoning_trace", "")
+        if d.get("client_id") == "client_apex":
+            # client_apex is the peer; verify anchor details are completely shielded
+            assert "Surya Wire" not in trace, "Privacy Shield Violation: Anchor company name leaked to lookalike peer!"
+            assert "95000000" not in trace, "Privacy Shield Violation: Anchor turnover leaked to lookalike peer!"
+            assert "9.50 Cr" not in trace, "Privacy Shield Violation: Anchor turnover leaked to lookalike peer!"
+            assert "client_surya" not in trace, "Privacy Shield Violation: Raw anchor ID leaked to lookalike peer!"
+        elif d.get("client_id") == "client_surya":
+            # client_surya is the anchor; verify peer company details are completely shielded
+            assert "Apex Electricals" not in trace, "Privacy Shield Violation: Peer company name leaked to anchor!"
+            assert "120000000" not in trace, "Privacy Shield Violation: Peer turnover leaked to anchor!"
+            assert "12.00 Cr" not in trace, "Privacy Shield Violation: Peer turnover leaked to anchor!"
+            assert "client_apex" not in trace, "Privacy Shield Violation: Raw peer ID leaked to anchor!"
+

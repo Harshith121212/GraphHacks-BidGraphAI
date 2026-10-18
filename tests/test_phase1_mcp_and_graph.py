@@ -161,21 +161,21 @@ def test_direct_and_5hop_lookalike_matching():
     surya = next(c for c in candidates if c["client_id"] == "client_surya")
     assert surya["match_score"] >= 0.50, f"Expected strong match score, got {surya['match_score']}"
 
-    # Assert 5-hop lookalike peer explicitly cites client_apex
+    # Assert 5-hop lookalike peer is privacy-shielded with supporting anchor topology
     assert len(surya["lookalike_peers"]) > 0, "Lookalike peers should not be empty for client_surya"
-    peer_ids = [p["peer_id"] for p in surya["lookalike_peers"]]
-    assert "client_apex" in peer_ids, "client_apex must be cited as lookalike peer"
+    primary_peer = surya["lookalike_peers"][0]
+    assert primary_peer["supporting_anchors"] >= 2, "Must mirror at least 2 distinct winning anchors"
+    assert primary_peer["benchmark_reference"] == "[Generic Peer Benchmark - Identity Shielded]"
 
-    apex_peer = next(p for p in surya["lookalike_peers"] if p["peer_id"] == "client_apex")
-    assert apex_peer["past_tender_id"] == "CPPP/NRL/POLY/2024/01"
-    assert "Wire Manufacturing Facility" in apex_peer["shared_capabilities"]
-    assert "Havells" in apex_peer["shared_capabilities"]
-    assert "LT/HT Armoured Cables" in apex_peer["shared_capabilities"]
+    # Privacy Shield Assertions: Zero anchor name, contract ID, or turnover leaked in lookalike peers
+    assert "client_apex" not in json.dumps(surya["lookalike_peers"]), "Privacy leak: Anchor client ID found in lookalike peers"
+    assert "CPPP/NRL/POLY/2024/01" not in json.dumps(surya["lookalike_peers"]), "Privacy leak: Anchor past tender ID found in lookalike peers"
 
     # Graph path trace verification
     assert "(:Client {id: 'client_surya'})" in surya["graph_path_trace"]
-    assert "client_apex" in surya["graph_path_trace"]
-    assert "CPPP/NRL/POLY/2024/01" in surya["graph_path_trace"]
+    assert "-[:MIRRORS_WINNERS" in surya["graph_path_trace"]
+    assert "client_apex" not in surya["graph_path_trace"], "Anchor client ID leaked in graph path trace"
+    assert "CPPP/NRL/POLY/2024/01" not in surya["graph_path_trace"], "Anchor past tender ID leaked in graph path trace"
 
 
 def test_jv_consortium_discovery():

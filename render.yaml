@@ -1,0 +1,38 @@
+services:
+  # BidGraphAI Production Web Service on Render
+  - type: web
+    name: bidgraph-ai
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: oregon
+    autoDeploy: true
+    healthCheckPath: /api/health
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: AUTO_SEED
+        value: "true"
+      - key: FALKORDB_GRAPH_NAME
+        value: tender_intel_graph
+      # FalkorDB Cloud Connection Settings (https://app.falkordb.cloud)
+      - key: FALKORDB_HOST
+        sync: false
+      - key: FALKORDB_PORT
+        value: "6379"
+      - key: FALKORDB_USERNAME
+        sync: false
+      - key: FALKORDB_PASSWORD
+        sync: false
+      - key: FALKORDB_SSL
+        value: "true"
+      # AI Reasoning Engine (NVIDIA Nemotron 3.5 via OpenRouter)
+      - key: OPENROUTER_MODEL
+        value: nvidia/nemotron-3.5-super-vl:free
+      - key: OPENROUTER_API_KEY_ALPHA
+        sync: false
+      - key: OPENROUTER_API_KEY_BETA
+        sync: false
+      # Communication Agent & Outbox
+      - key: DEFAULT_ALERT_EMAIL
+        value: hackathon-demo@outlook.com

@@ -13,6 +13,9 @@ document.addEventListener('DOMContentLoaded', () => {
     d3Simulation: null,
     batchDrafts: [],
     currentBatchIndex: 0,
+    lastUpdatedAffinityEntity: null,
+    lastUpdatedAffinityEntities: [],
+    lastUpdatedAffinityClient: null,
   };
 
   // DOM Elements
@@ -938,7 +941,11 @@ document.addEventListener('DOMContentLoaded', () => {
           <!-- Outcome Buttons (Won / Lost Feedback) & Draft Email Action -->
           <div class="flex items-center justify-between pt-1 border-t border-slate-800/80 flex-wrap gap-2">
             <span class="text-[11px] text-slate-400">
-              ${isTerminal ? `Outcome recorded: <strong>${status}</strong>` : 'Did the client win or lose this tender?'}
+              ${status === 'WON' 
+                ? '<span class="text-emerald-400 font-semibold font-mono flex items-center gap-1"><i data-lucide="check" class="w-3 h-3"></i> Outcome: WON</span> <span class="text-[10px] text-slate-500">(Click Lost to change)</span>' 
+                : status === 'LOST' 
+                ? '<span class="text-rose-400 font-semibold font-mono flex items-center gap-1"><i data-lucide="x" class="w-3 h-3"></i> Outcome: LOST</span> <span class="text-[10px] text-slate-500">(Click Won to change)</span>' 
+                : 'Did the client win or lose this tender?'}
             </span>
             <div class="flex items-center space-x-2">
               <button 
@@ -953,19 +960,27 @@ document.addEventListener('DOMContentLoaded', () => {
                 data-client-id="${alert.client_id}" 
                 data-tender-id="${alert.tender_id}" 
                 data-outcome="WON"
-                ${isTerminal ? 'disabled' : ''}
-                class="btn-outcome-won px-3 py-1 rounded text-xs font-semibold bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1">
-                <i data-lucide="trophy" class="w-3 h-3 text-emerald-400"></i>
-                <span>Won</span>
+                class="btn-outcome-won px-3 py-1 rounded text-xs font-semibold ${
+                  status === 'WON'
+                    ? 'bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-400 shadow-md shadow-emerald-500/40 ring-1 ring-emerald-400'
+                    : 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30'
+                } transition flex items-center gap-1"
+                title="${status === 'WON' ? 'Tender already recorded as WON in FalkorDB (click to refresh memory)' : 'Mark tender as WON in FalkorDB'}">
+                <i data-lucide="trophy" class="w-3 h-3 ${status === 'WON' ? 'text-white' : 'text-emerald-400'}"></i>
+                <span>${status === 'WON' ? '✓ Won' : 'Won'}</span>
               </button>
               <button 
                 data-client-id="${alert.client_id}" 
                 data-tender-id="${alert.tender_id}" 
                 data-outcome="LOST"
-                ${isTerminal ? 'disabled' : ''}
-                class="btn-outcome-lost px-3 py-1 rounded text-xs font-semibold bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1">
-                <i data-lucide="x" class="w-3 h-3 text-rose-400"></i>
-                <span>Lost</span>
+                class="btn-outcome-lost px-3 py-1 rounded text-xs font-semibold ${
+                  status === 'LOST'
+                    ? 'bg-rose-600 hover:bg-rose-500 text-white border border-rose-400 shadow-md shadow-rose-500/40 ring-1 ring-rose-400'
+                    : 'bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30'
+                } transition flex items-center gap-1"
+                title="${status === 'LOST' ? 'Tender already recorded as LOST in FalkorDB (click to refresh memory)' : 'Mark tender as LOST in FalkorDB'}">
+                <i data-lucide="x" class="w-3 h-3 ${status === 'LOST' ? 'text-white' : 'text-rose-400'}"></i>
+                <span>${status === 'LOST' ? '✗ Lost' : 'Lost'}</span>
               </button>
             </div>
           </div>
@@ -998,35 +1013,98 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Render Learned Affinities Leaderboard
   function renderAffinities(affinities) {
-    if (!affinities || affinities.length === 0) {
+    if (!el.affinityPanel) return;
+
+    let list = Array.isArray(affinities) ? [...affinities] : [];
+
+    // Filter affinities by client if a specific client tab is active
+    if (state.currentClientFilter && state.currentClientFilter !== 'ALL') {
+      list = list.filter(aff => aff.client_id === state.currentClientFilter);
+    }
+
+    if (!list || list.length === 0) {
       el.affinityPanel.innerHTML = `
-        <div class="text-xs text-slate-400 italic py-2 text-center">
-          No affinity records logged yet. Click "Won" or "Lost" on an alert to update graph weights.
+        <div class="text-xs text-slate-400 italic py-4 text-center">
+          ${state.currentClientFilter && state.currentClientFilter !== 'ALL'
+            ? `No affinity records logged yet for this client. Click "Won" or "Lost" on an alert to update graph weights.`
+            : `No affinity records logged yet. Click "Won" or "Lost" on an alert to update graph weights.`}
         </div>
       `;
       return;
     }
 
-    el.affinityPanel.innerHTML = affinities.map(aff => {
-      const weightPct = Math.round((aff.affinity_weight || 0.5) * 100);
-      const winRatePct = Math.round((aff.win_rate || 0.0) * 100);
+    // Sort: most recently updated first, then highest affinity weight
+    list.sort((a, b) => {
+      const timeA = a.updated_at || 0;
+      const timeB = b.updated_at || 0;
+      if (timeB !== timeA) return timeB - timeA;
+      return (b.affinity_weight || 0) - (a.affinity_weight || 0);
+    });
+
+    const nowSec = getCurrentTimestamp();
+
+    el.affinityPanel.innerHTML = list.map(aff => {
+      const totalBids = (aff.wins !== undefined && aff.losses !== undefined)
+        ? (aff.wins + aff.losses)
+        : (aff.total_bids || 0);
+      const winsCount = aff.wins !== undefined ? aff.wins : (aff.bids_won || 0);
+      const winRatePct = Math.round((aff.win_rate !== undefined ? aff.win_rate : (totalBids > 0 ? winsCount / totalBids : 0)) * 100);
+
+      // Compute display affinity score: Laplace smoothed win probability (50% neutral base for 0 bids)
+      let laplaceProb = totalBids > 0
+        ? ((winsCount + 1) / (totalBids + 2))
+        : (aff.affinity_weight ? Math.min(1.0, Math.max(0.0, 0.5 + (aff.affinity_weight * 2))) : 0.5);
+      const weightPct = Math.round(laplaceProb * 100);
+
+      const targetEntity = aff.target_entity || aff.department_id || aff.department_name || 'Target Authority';
+      const clientName = aff.client_name || aff.client_id;
+
+      // Check if this card was recently updated
+      const isEntityMatched = (state.lastUpdatedAffinityEntity === targetEntity) 
+        || (state.lastUpdatedAffinityEntities && state.lastUpdatedAffinityEntities.includes(targetEntity));
+      const isClientMatched = !state.lastUpdatedAffinityClient || state.lastUpdatedAffinityClient === aff.client_id;
+      const isJustUpdated = (isEntityMatched && isClientMatched)
+        || (aff.updated_at && Math.abs(nowSec - aff.updated_at) < 300);
+
+      const typeBadge = aff.affinity_type === 'CATEGORY'
+        ? `<span class="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30">CATEGORY</span>`
+        : `<span class="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">DEPT</span>`;
+
       return `
-        <div class="p-2.5 rounded-lg bg-slate-950/60 border border-slate-800 text-xs space-y-1.5">
-          <div class="flex items-center justify-between">
-            <span class="font-bold text-white">${aff.client_id} &rarr; <span class="text-indigo-300">${aff.target_entity || aff.department_id || aff.department_name}</span></span>
-            <span class="font-mono text-purple-400 font-bold">${weightPct}% Affinity</span>
+        <div class="p-2.5 rounded-lg border text-xs space-y-1.5 transition-all duration-300 ${
+          isJustUpdated 
+            ? 'bg-purple-950/40 border-purple-500/60 shadow-lg ring-1 ring-purple-500/30' 
+            : 'bg-slate-950/60 border-slate-800'
+        }">
+          <div class="flex items-center justify-between gap-1">
+            <div class="flex items-center gap-1.5 min-w-0">
+              ${typeBadge}
+              <span class="font-bold text-white truncate max-w-[130px]" title="${clientName}">${clientName}</span>
+              <span class="text-slate-500 shrink-0">&rarr;</span>
+              <span class="text-indigo-300 font-semibold truncate" title="${targetEntity}">${targetEntity}</span>
+            </div>
+            <div class="flex items-center gap-1 shrink-0">
+              ${isJustUpdated ? '<span class="text-[9px] font-mono font-bold text-emerald-400 bg-emerald-500/10 px-1 py-0.5 rounded animate-pulse">JUST UPDATED</span>' : ''}
+              <span class="font-mono text-purple-400 font-bold">${weightPct}% Affinity</span>
+            </div>
           </div>
           <!-- Progress bar -->
           <div class="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
-            <div class="bg-gradient-to-r from-indigo-500 to-purple-500 h-1.5 rounded-full" style="width: ${weightPct}%"></div>
+            <div class="bg-gradient-to-r from-indigo-500 to-purple-500 h-1.5 rounded-full transition-all duration-500" style="width: ${weightPct}%"></div>
           </div>
           <div class="flex items-center justify-between text-[10px] text-slate-400 font-mono">
             <span>Win Rate: <strong class="text-emerald-400">${winRatePct}%</strong></span>
-            <span>Bids: ${(aff.wins !== undefined && aff.losses !== undefined) ? (aff.wins + aff.losses) : (aff.total_bids || 0)} (Won: ${aff.wins !== undefined ? aff.wins : (aff.bids_won || 0)})</span>
+            <span>Bids: ${totalBids} (Won: ${winsCount})</span>
+            ${aff.updated_at ? `<span class="text-[9px] text-slate-500">${formatDateTime(aff.updated_at)}</span>` : ''}
           </div>
         </div>
       `;
     }).join('');
+
+    // Auto-scroll to top so the updated affinity card is immediately visible
+    if (el.affinityPanel) {
+      el.affinityPanel.scrollTop = 0;
+    }
   }
 
   // Date and Time Formatting Helpers
@@ -1444,13 +1522,25 @@ document.addEventListener('DOMContentLoaded', () => {
         }),
       }, 'record_tender_bid_outcome');
 
+      const dept = data.department_affinity?.department_name || (data.category_affinities && data.category_affinities[0]?.category_name) || 'Target Dept';
       if (data.department_affinity?.status === 'NO_DEPARTMENT') {
         showToast('Graph Memory Notice', 'No procuring department associated with tender; department affinity memory skipped.', 'info');
       } else {
-        const dept = data.department_affinity?.department_name || 'Target Dept';
         const winRate = Math.round((data.department_affinity?.win_rate || 0) * 100);
-        showToast('Graph Memory Updated', `Affinity weight for ${dept} updated. Win rate: ${winRate}%.`, 'success');
+        showToast('Graph Memory Updated', `Affinity weight for ${dept} updated (${outcome}). Win rate: ${winRate}%.`, 'success');
       }
+
+      const updatedEntities = [];
+      if (data.department_affinity?.department_name) updatedEntities.push(data.department_affinity.department_name);
+      if (Array.isArray(data.category_affinities)) {
+        data.category_affinities.forEach(c => {
+          if (c.category_name) updatedEntities.push(c.category_name);
+        });
+      }
+
+      state.lastUpdatedAffinityEntity = dept;
+      state.lastUpdatedAffinityEntities = updatedEntities;
+      state.lastUpdatedAffinityClient = clientId;
 
       await fetchDashboard();
     } catch (err) {
@@ -1870,6 +1960,14 @@ document.addEventListener('DOMContentLoaded', () => {
       copyTextToClipboard(fullText, 'Complete email draft copied to clipboard!');
     });
   }
+
+  // Global Error Listeners
+  window.addEventListener('error', (event) => {
+    console.error('BidGraphAI UI Error:', event.error || event.message);
+  });
+  window.addEventListener('unhandledrejection', (event) => {
+    console.error('BidGraphAI Unhandled Rejection:', event.reason);
+  });
 
   // Initial Load Sequence
   (async function init() {

@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     FALKORDB_USERNAME: Optional[str] = None
     FALKORDB_PASSWORD: Optional[str] = None
     FALKORDB_SSL: bool = False
+    FALKORDB_SSL_VERIFY: bool = True
     FALKORDB_URL: Optional[str] = None
     FALKORDB_GRAPH_NAME: str = "tender_intel_graph"
 
@@ -33,13 +34,25 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: Optional[str] = None
     GOOGLE_API_KEY: Optional[str] = None
 
+    # Email Alert Configuration (hackathon-demo@outlook.com default)
+    DEFAULT_ALERT_EMAIL: str = "hackathon-demo@outlook.com"
+    SMTP_HOST: Optional[str] = None
+    SMTP_PORT: int = 587
+    SMTP_USER: Optional[str] = None
+    SMTP_PASSWORD: Optional[str] = None
+    SMTP_FROM: str = "BidGraphAI Alerts <hackathon-demo@outlook.com>"
+    RESEND_API_KEY: Optional[str] = None
+    SENDGRID_API_KEY: Optional[str] = None
+    BREVO_API_KEY: Optional[str] = None
+    EMAIL_AGENT_API_KEY: Optional[str] = None
+
     @property
     def hf_token(self) -> Optional[str]:
         return self.HF_TOKEN or self.HUGGINGFACE_API_KEY
 
     @property
     def gemini_api_key(self) -> Optional[str]:
-        return self.GEMINI_API_KEY or self.GOOGLE_API_KEY
+        return self.EMAIL_AGENT_API_KEY or self.GEMINI_API_KEY or self.GOOGLE_API_KEY
 
     @property
     def openrouter_api_key(self) -> Optional[str]:

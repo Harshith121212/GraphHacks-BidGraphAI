@@ -1,4 +1,8 @@
-"""Rich multi-hop Indian tender and client graph seeder for FalkorDB using actual GeM and CPPP tenders."""
+"""Rich multi-hop Indian tender and client graph seeder for FalkorDB using actual GeM and CPPP tenders.
+
+DISCLAIMER: All contractor client identities, financial balances, and brand authorizations
+in this seeder are synthetic demonstration records created for hackathon benchmarking purposes.
+"""
 
 import os
 import sys
@@ -24,6 +28,20 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     and MSME Manufacturing.
     """
     graph: Graph = get_graph(graph_name)
+
+    # Memory Survival Check: if not explicitly forcing a clear, check for existing SystemMeta marker
+    if not clear_existing:
+        try:
+            check_res = graph.query("MATCH (sm:SystemMeta {key: 'scraper_status'}) RETURN sm.total_tenders_ingested").result_set
+            if check_res and len(check_res) > 0:
+                logger.info("SystemMeta marker found in FalkorDB; graph already initialized. Preserving memory across cold start.")
+                return {
+                    "status": "preserved",
+                    "message": "Graph already initialized. Persistent Won/Lost memory and affinity weights preserved.",
+                    "total_tenders": check_res[0][0] if check_res[0] else 26,
+                }
+        except Exception as exc:
+            logger.debug("Could not verify existing SystemMeta marker: %s", exc)
 
     if clear_existing:
         try:
@@ -85,7 +103,6 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     graph.query("""
     MERGE (:WorkCategory {name: 'Electrical'})
     MERGE (:WorkCategory {name: 'Civil Works'})
-    MERGE (:WorkCategory {name: 'Civil'})
     MERGE (:WorkCategory {name: 'IT Hardware'})
     MERGE (:WorkCategory {name: 'Furniture'})
     MERGE (:WorkCategory {name: 'Medical Equipment'})
@@ -124,20 +141,20 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     MERGE (:Certification {name: 'CDSCO Licensed'})
     """)
 
-    # Brands
+    # Brands (Simulated benchmark preference categories)
     graph.query("""
-    MERGE (:Brand {name: 'Havells'})
-    MERGE (:Brand {name: 'Polycab'})
-    MERGE (:Brand {name: 'ABB'})
-    MERGE (:Brand {name: 'Schneider Electric'})
-    MERGE (:Brand {name: 'HP'})
-    MERGE (:Brand {name: 'Dell'})
-    MERGE (:Brand {name: 'Cisco'})
-    MERGE (:Brand {name: 'Voltas'})
-    MERGE (:Brand {name: 'Blue Star'})
-    MERGE (:Brand {name: 'Godrej Interio'})
-    MERGE (:Brand {name: 'Nilkamal'})
-    MERGE (:Brand {name: 'Philips Healthcare'})
+    MERGE (:Brand {name: 'Havells', is_demo_sample: true})
+    MERGE (:Brand {name: 'Polycab', is_demo_sample: true})
+    MERGE (:Brand {name: 'ABB', is_demo_sample: true})
+    MERGE (:Brand {name: 'Schneider Electric', is_demo_sample: true})
+    MERGE (:Brand {name: 'HP', is_demo_sample: true})
+    MERGE (:Brand {name: 'Dell', is_demo_sample: true})
+    MERGE (:Brand {name: 'Cisco', is_demo_sample: true})
+    MERGE (:Brand {name: 'Voltas', is_demo_sample: true})
+    MERGE (:Brand {name: 'Blue Star', is_demo_sample: true})
+    MERGE (:Brand {name: 'Godrej Interio', is_demo_sample: true})
+    MERGE (:Brand {name: 'Nilkamal', is_demo_sample: true})
+    MERGE (:Brand {name: 'Philips Healthcare', is_demo_sample: true})
     """)
 
     # Products
@@ -227,6 +244,36 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     MERGE (t_past)-[:REQUIRES_CERT]->(c_bis)
     MERGE (t_past)-[:PREFERS_BRAND {strict_auth_required: true}]->(b_hav)
     MERGE (t_past)-[:REQUIRES_PRODUCT {quantity: 6000, unit: 'METERS', requires_oem_or_auth: true}]->(p_cab)
+
+    // Second Historical Won Tender under dept_hurl in same WorkCategory (Electrical)
+    MERGE (t_past2:Tender {
+        id: 'CPPP/HURL/ELECTRICAL/2024/02',
+        title: 'HURL Sindri Substation Electrical Distribution & Cabling Package',
+        reference_no: 'HURL/SINDRI/ELECT/2024/02',
+        tender_amount: 92000000.0,
+        expected_turnover_3yr: 60000000.0,
+        min_net_worth: 15000000.0,
+        min_solvency: 20000000.0,
+        max_ongoing_work_allowed: 120000000.0,
+        oem_required: true,
+        min_local_content_class: 'CLASS-1',
+        min_tech_staff: 20,
+        msme_exempt_turnover: false,
+        status: 'AWARDED',
+        published_at: 1686000000,
+        deadline_at: 1690000000,
+        scraped_at: '2026-10-10T11:00:00+05:30',
+        source_portal: 'CPPP',
+        listed_date: '2024-06-15',
+        tender_url: 'https://eprocure.gov.in/eprocure/app'
+    })
+    MERGE (d_hurl)-[:ISSUED]->(t_past2)
+    MERGE (t_past2)-[:LOCATED_IN]->(r_mh)
+    MERGE (t_past2)-[:IN_CATEGORY]->(wc_elec)
+    MERGE (t_past2)-[:REQUIRES_SPECIALIZATION]->(s_wire)
+    MERGE (t_past2)-[:REQUIRES_CERT]->(c_bis)
+    MERGE (t_past2)-[:PREFERS_BRAND {strict_auth_required: true}]->(b_hav)
+    MERGE (t_past2)-[:REQUIRES_PRODUCT {quantity: 5000, unit: 'METERS', requires_oem_or_auth: true}]->(p_cab)
     """)
 
     # Connect the primary active CPPP electrical tenders to Havells brand, wire specialization,
@@ -291,6 +338,7 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     MERGE (c_surya:Client {
         id: 'client_surya',
         name: 'Surya Wire & Switchgear Pvt Ltd',
+        email: 'hackathon-demo@outlook.com',
         founded_date: '2016-08-20',
         legal_form: 'PRIVATE_LIMITED',
         turnover_fy24: 85000000.0,
@@ -312,7 +360,7 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     MERGE (c_surya)-[:HOLDS_CERT {valid_until: 1893456000}]->(c_bis)
     MERGE (c_surya)-[:AUTHORIZED_FOR {role: 'Authorized Vendor', territory: 'All India', valid_until: 1893456000}]->(b_hav)
     MERGE (c_surya)-[:SUPPLIES {is_oem: true, facility_name: 'Bengaluru Wire Unit', monthly_capacity: 50000}]->(p_cab)
-    MERGE (c_surya)-[:HOLDS_ENLISTMENT {grade: 'Class II', valid_until: 1893456000}]->(ec_elec)
+    MERGE (c_surya)-[:ENLISTED_AS {grade: 'Class II', valid_until: 1893456000}]->(ec_elec)
     MERGE (c_surya)-[:OPERATES_IN {gstin: '29BBBBB2222B1Z5', gst_valid: true, filing_status: 'ACTIVE'}]->(r_kar)
     MERGE (c_surya)-[:OPERATES_IN {gstin: '27BBBBB2222B1Z4', gst_valid: true, filing_status: 'ACTIVE'}]->(r_mh)
     """)
@@ -336,6 +384,7 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     MERGE (c_apex:Client {
         id: 'client_apex',
         name: 'Apex Electricals & Cables Ltd',
+        email: 'hackathon-demo@outlook.com',
         founded_date: '2010-04-15',
         legal_form: 'PUBLIC_LIMITED',
         turnover_fy24: 110000000.0,
@@ -360,7 +409,7 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     MERGE (c_apex)-[:AUTHORIZED_FOR {role: 'Authorized Manufacturer', territory: 'All India', valid_until: 1893456000}]->(b_hav)
     MERGE (c_apex)-[:AUTHORIZED_FOR {role: 'Authorized Vendor', territory: 'All India', valid_until: 1893456000}]->(b_poly)
     MERGE (c_apex)-[:SUPPLIES {is_oem: true, facility_name: 'Apex Cable Works', monthly_capacity: 120000}]->(p_cab)
-    MERGE (c_apex)-[:HOLDS_ENLISTMENT {grade: 'Class II', valid_until: 1893456000}]->(ec_elec)
+    MERGE (c_apex)-[:ENLISTED_AS {grade: 'Class II', valid_until: 1893456000}]->(ec_elec)
     MERGE (c_apex)-[:OPERATES_IN {gstin: '29AAAAA1111A1Z5', gst_valid: true, filing_status: 'ACTIVE'}]->(r_kar)
     MERGE (c_apex)-[:OPERATES_IN {gstin: '27AAAAA1111A1Z8', gst_valid: true, filing_status: 'ACTIVE'}]->(r_mh)
 
@@ -385,6 +434,7 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     MERGE (c_kav:Client {
         id: 'client_kaveri',
         name: 'Kaveri Civil & Structural Infra Ltd',
+        email: 'hackathon-demo@outlook.com',
         founded_date: '2012-03-10',
         legal_form: 'PRIVATE_LIMITED',
         turnover_fy24: 200000000.0,
@@ -408,12 +458,12 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     MERGE (c_kav)-[:HOLDS_CERT {valid_until: 1893456000}]->(c_is1786)
     MERGE (c_kav)-[:SUPPLIES {is_oem: false, facility_name: 'Kaveri Precast Facility', monthly_capacity: 10000}]->(p_pcc)
     MERGE (c_kav)-[:SUPPLIES {is_oem: false, facility_name: 'Kaveri Rebar Fabrication', monthly_capacity: 50000}]->(p_stl)
-    MERGE (c_kav)-[:HOLDS_ENLISTMENT {grade: 'Class I', valid_until: 1893456000}]->(ec_civ)
+    MERGE (c_kav)-[:ENLISTED_AS {grade: 'Class I', valid_until: 1893456000}]->(ec_civ)
     MERGE (c_kav)-[:OPERATES_IN {gstin: '29CCCCC3333C1Z6', gst_valid: true, filing_status: 'ACTIVE'}]->(r_kar)
     MERGE (c_kav)-[:OPERATES_IN {gstin: '27CCCCC3333C1Z2', gst_valid: true, filing_status: 'ACTIVE'}]->(r_mh)
     """)
 
-    # Client 4: Larsen Highway & Bridge Engineering Ltd (Heavy Civil & NHAI EPC)
+    # Client 4: Lakshya Highway & Infrastructure Ltd (Heavy Civil & NHAI EPC)
     graph.query("""
     MATCH (r_mh:Region {name: 'Maharashtra'})
     MATCH (r_as:Region {name: 'Assam'})
@@ -426,9 +476,10 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     MATCH (p_stl:Product {name: 'Reinforcement Steel Fe500D'})
     MATCH (ec_nhai:EnlistmentClass {code: 'NHAI-SUPER-CLASS'})
 
-    MERGE (c_larsen:Client {
-        id: 'client_larsen_civil',
-        name: 'Larsen Highway & Bridge Engineering Ltd',
+    MERGE (c_lakshya:Client {
+        id: 'client_lakshya_civil',
+        name: 'Lakshya Highway & Infrastructure Ltd',
+        email: 'hackathon-demo@outlook.com',
         founded_date: '2008-01-20',
         legal_form: 'PUBLIC_LIMITED',
         turnover_fy24: 1800000000.0,
@@ -443,18 +494,18 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
         local_content_class: 'CLASS-1',
         is_blacklisted: false,
         tech_staff_count: 320,
-        portal_seller_id: 'LARSEN-GEM-004'
+        portal_seller_id: 'LAKSHYA-GEM-004'
     })
-    MERGE (c_larsen)-[:WORKS_IN]->(wc_civ)
-    MERGE (c_larsen)-[:HAS_SPECIALIZATION]->(s_high)
-    MERGE (c_larsen)-[:HAS_SPECIALIZATION]->(s_civ)
-    MERGE (c_larsen)-[:HOLDS_CERT {valid_until: 1893456000}]->(c_cpwd)
-    MERGE (c_larsen)-[:HOLDS_CERT {valid_until: 1893456000}]->(c_is1786)
-    MERGE (c_larsen)-[:SUPPLIES {is_oem: true, facility_name: 'Larsen Fabrication Yard', monthly_capacity: 50000}]->(p_stl)
-    MERGE (c_larsen)-[:HOLDS_ENLISTMENT {grade: 'Super Class', valid_until: 1893456000}]->(ec_nhai)
-    MERGE (c_larsen)-[:OPERATES_IN {gstin: '27LLLLL4444L1Z1', gst_valid: true, filing_status: 'ACTIVE'}]->(r_mh)
-    MERGE (c_larsen)-[:OPERATES_IN {gstin: '18LLLLL4444L1Z3', gst_valid: true, filing_status: 'ACTIVE'}]->(r_as)
-    MERGE (c_larsen)-[:OPERATES_IN {gstin: '09LLLLL4444L1Z9', gst_valid: true, filing_status: 'ACTIVE'}]->(r_up)
+    MERGE (c_lakshya)-[:WORKS_IN]->(wc_civ)
+    MERGE (c_lakshya)-[:HAS_SPECIALIZATION]->(s_high)
+    MERGE (c_lakshya)-[:HAS_SPECIALIZATION]->(s_civ)
+    MERGE (c_lakshya)-[:HOLDS_CERT {valid_until: 1893456000}]->(c_cpwd)
+    MERGE (c_lakshya)-[:HOLDS_CERT {valid_until: 1893456000}]->(c_is1786)
+    MERGE (c_lakshya)-[:SUPPLIES {is_oem: true, facility_name: 'Lakshya Fabrication Yard', monthly_capacity: 50000}]->(p_stl)
+    MERGE (c_lakshya)-[:ENLISTED_AS {grade: 'Super Class', valid_until: 1893456000}]->(ec_nhai)
+    MERGE (c_lakshya)-[:OPERATES_IN {gstin: '27LLLLL4444L1Z1', gst_valid: true, filing_status: 'ACTIVE'}]->(r_mh)
+    MERGE (c_lakshya)-[:OPERATES_IN {gstin: '18LLLLL4444L1Z3', gst_valid: true, filing_status: 'ACTIVE'}]->(r_as)
+    MERGE (c_lakshya)-[:OPERATES_IN {gstin: '09LLLLL4444L1Z9', gst_valid: true, filing_status: 'ACTIVE'}]->(r_up)
     """)
 
     # Client 5: Zenith Railtech & Telecom Systems Ltd (Railway & Track Infrastructure)
@@ -468,6 +519,7 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     MERGE (c_zen:Client {
         id: 'client_zenith',
         name: 'Zenith Railtech & Telecom Systems Ltd',
+        email: 'hackathon-demo@outlook.com',
         founded_date: '2014-06-18',
         legal_form: 'PRIVATE_LIMITED',
         turnover_fy24: 170000000.0,
@@ -486,7 +538,7 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     })
     MERGE (c_zen)-[:WORKS_IN]->(wc_rail)
     MERGE (c_zen)-[:HOLDS_CERT {valid_until: 1893456000}]->(c_iso)
-    MERGE (c_zen)-[:HOLDS_ENLISTMENT {grade: 'Class A', valid_until: 1893456000}]->(ec_rail)
+    MERGE (c_zen)-[:ENLISTED_AS {grade: 'Class A', valid_until: 1893456000}]->(ec_rail)
     MERGE (c_zen)-[:OPERATES_IN {gstin: '29DDDDD4444D1Z7', gst_valid: true, filing_status: 'ACTIVE'}]->(r_kar)
     MERGE (c_zen)-[:OPERATES_IN {gstin: '19DDDDD4444D1Z5', gst_valid: true, filing_status: 'ACTIVE'}]->(r_wb)
     """)
@@ -509,6 +561,7 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     MERGE (c_it:Client {
         id: 'client_bharat_it',
         name: 'Bharat Digital Networks & Systems Ltd',
+        email: 'hackathon-demo@outlook.com',
         founded_date: '2015-09-12',
         legal_form: 'PUBLIC_LIMITED',
         turnover_fy24: 500000000.0,
@@ -539,7 +592,7 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     MERGE (c_it)-[:OPERATES_IN {gstin: '27EEEEE5555E1Z6', gst_valid: true, filing_status: 'ACTIVE'}]->(r_mh)
     """)
 
-    # Client 7: Voltas & BlueStar Turnkey HVAC Engineers LLP (HVAC & Air Conditioning)
+    # Client 7: Vardhan Turnkey HVAC Engineers LLP (HVAC & Air Conditioning)
     graph.query("""
     MATCH (r_kar:Region {name: 'Karnataka'})
     MATCH (r_mh:Region {name: 'Maharashtra'})
@@ -552,8 +605,9 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     MATCH (p_vrv:Product {name: 'VRV/VRF Air Conditioning System'})
 
     MERGE (c_hvac:Client {
-        id: 'client_voltas_hvac',
-        name: 'Voltas & BlueStar Turnkey HVAC Engineers LLP',
+        id: 'client_vardhan_hvac',
+        name: 'Vardhan Turnkey HVAC Engineers LLP',
+        email: 'hackathon-demo@outlook.com',
         founded_date: '2017-02-14',
         legal_form: 'LLP',
         turnover_fy24: 350000000.0,
@@ -568,20 +622,20 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
         local_content_class: 'CLASS-1',
         is_blacklisted: false,
         tech_staff_count: 60,
-        portal_seller_id: 'VOLTAS-GEM-007'
+        portal_seller_id: 'VARDHAN-GEM-007'
     })
     MERGE (c_hvac)-[:WORKS_IN]->(wc_elec)
     MERGE (c_hvac)-[:HAS_SPECIALIZATION]->(s_hvac)
     MERGE (c_hvac)-[:HOLDS_CERT {valid_until: 1893456000}]->(c_bee)
-    MERGE (c_hvac)-[:AUTHORIZED_FOR {role: 'Authorized Turnkey Dealer', territory: 'All India', valid_until: 1893456000}]->(b_volt)
-    MERGE (c_hvac)-[:AUTHORIZED_FOR {role: 'Certified Commercial Installer', territory: 'All India', valid_until: 1893456000}]->(b_blue)
+    MERGE (c_hvac)-[:AUTHORIZED_FOR {role: 'Authorized Turnkey Dealer', territory: 'All India', valid_until: 1893456000, is_demo_authorization: true}]->(b_volt)
+    MERGE (c_hvac)-[:AUTHORIZED_FOR {role: 'Certified Commercial Installer', territory: 'All India', valid_until: 1893456000, is_demo_authorization: true}]->(b_blue)
     MERGE (c_hvac)-[:SUPPLIES {is_oem: false, facility_name: 'Pune Assembly Depot', monthly_capacity: 400}]->(p_vrv)
     MERGE (c_hvac)-[:OPERATES_IN {gstin: '27FFFFF6666F1Z9', gst_valid: true, filing_status: 'ACTIVE'}]->(r_mh)
     MERGE (c_hvac)-[:OPERATES_IN {gstin: '29FFFFF6666F1Z3', gst_valid: true, filing_status: 'ACTIVE'}]->(r_kar)
     MERGE (c_hvac)-[:OPERATES_IN {gstin: '07FFFFF6666F1Z7', gst_valid: true, filing_status: 'ACTIVE'}]->(r_dl)
     """)
 
-    # Client 8: Godrej Workspaces & Interior Turnkey Ltd (Office Furniture & Storage)
+    # Client 8: Garuda Workspaces & Modular Turnkey Ltd (Office Furniture & Storage)
     graph.query("""
     MATCH (r_mh:Region {name: 'Maharashtra'})
     MATCH (r_kar:Region {name: 'Karnataka'})
@@ -594,8 +648,9 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     MATCH (p_comp:Product {name: 'Compactor Storage System'})
 
     MERGE (c_god:Client {
-        id: 'client_godrej_furn',
-        name: 'Godrej Workspaces & Interior Turnkey Ltd',
+        id: 'client_garuda_furn',
+        name: 'Garuda Workspaces & Modular Turnkey Ltd',
+        email: 'hackathon-demo@outlook.com',
         founded_date: '2011-11-05',
         legal_form: 'PUBLIC_LIMITED',
         turnover_fy24: 800000000.0,
@@ -610,15 +665,15 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
         local_content_class: 'CLASS-1',
         is_blacklisted: false,
         tech_staff_count: 110,
-        portal_seller_id: 'GODREJ-GEM-008'
+        portal_seller_id: 'GARUDA-GEM-008'
     })
     MERGE (c_god)-[:WORKS_IN]->(wc_fur)
     MERGE (c_god)-[:HAS_SPECIALIZATION]->(s_mod)
     MERGE (c_god)-[:HOLDS_CERT {valid_until: 1893456000}]->(c_bif)
-    MERGE (c_god)-[:AUTHORIZED_FOR {role: 'Original Brand Division', territory: 'All India', valid_until: 1893456000}]->(b_god)
-    MERGE (c_god)-[:AUTHORIZED_FOR {role: 'Authorized Commercial Wholesaler', territory: 'All India', valid_until: 1893456000}]->(b_nil)
-    MERGE (c_god)-[:SUPPLIES {is_oem: true, facility_name: 'Godrej Plant Vikhroli', monthly_capacity: 15000}]->(p_fur)
-    MERGE (c_god)-[:SUPPLIES {is_oem: true, facility_name: 'Godrej Plant Vikhroli', monthly_capacity: 2500}]->(p_comp)
+    MERGE (c_god)-[:AUTHORIZED_FOR {role: 'Authorized System Integrator', territory: 'All India', valid_until: 1893456000, is_demo_authorization: true}]->(b_god)
+    MERGE (c_god)-[:AUTHORIZED_FOR {role: 'Authorized Commercial Wholesaler', territory: 'All India', valid_until: 1893456000, is_demo_authorization: true}]->(b_nil)
+    MERGE (c_god)-[:SUPPLIES {is_oem: true, facility_name: 'Garuda Plant Vikhroli', monthly_capacity: 15000}]->(p_fur)
+    MERGE (c_god)-[:SUPPLIES {is_oem: true, facility_name: 'Garuda Plant Vikhroli', monthly_capacity: 2500}]->(p_comp)
     MERGE (c_god)-[:OPERATES_IN {gstin: '27GGGGG7777G1Z4', gst_valid: true, filing_status: 'ACTIVE'}]->(r_mh)
     MERGE (c_god)-[:OPERATES_IN {gstin: '29GGGGG7777G1Z1', gst_valid: true, filing_status: 'ACTIVE'}]->(r_kar)
     """)
@@ -638,6 +693,7 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     MERGE (c_med:Client {
         id: 'client_meditech',
         name: 'Meditech LifeSciences & Hospital Solutions Pvt Ltd',
+        email: 'hackathon-demo@outlook.com',
         founded_date: '2018-05-22',
         legal_form: 'PRIVATE_LIMITED',
         turnover_fy24: 250000000.0,
@@ -678,6 +734,7 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     MERGE (c_msme:Client {
         id: 'client_kalyani_msme',
         name: 'Kalyani Micro Steels & Heavy Fabrication (MSME)',
+        email: 'hackathon-demo@outlook.com',
         founded_date: '2019-10-10',
         legal_form: 'PROPRIETORSHIP',
         turnover_fy24: 70000000.0,
@@ -703,7 +760,7 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     MERGE (c_msme)-[:OPERATES_IN {gstin: '27JJJJJ9999J1Z6', gst_valid: true, filing_status: 'ACTIVE'}]->(r_mh)
     """)
 
-    # Client 11: Tata Renewable & Solar EPC Solutions Ltd (Solar EPC)
+    # Client 11: Tarun CleanTech Solar EPC Solutions Ltd (Solar EPC)
     graph.query("""
     MATCH (r_kar:Region {name: 'Karnataka'})
     MATCH (r_mh:Region {name: 'Maharashtra'})
@@ -714,12 +771,17 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     MATCH (s_sol:Specialization {name: 'Solar PV Farm Erection'})
     MATCH (s_ht:Specialization {name: 'HT Substation Erection'})
     MATCH (c_iso:Certification {name: 'ISO 9001:2015'})
+    MATCH (c_bis:Certification {name: 'BIS IS-7098'})
+    MATCH (b_hav:Brand {name: 'Havells'})
     MATCH (b_sch:Brand {name: 'Schneider Electric'})
     MATCH (b_abb:Brand {name: 'ABB'})
+    MATCH (d_hurl:Department {id: 'dept_hurl'})
+    MATCH (t_past2:Tender {id: 'CPPP/HURL/ELECTRICAL/2024/02'})
 
-    MERGE (c_tata:Client {
-        id: 'client_tata_solar',
-        name: 'Tata Renewable & Solar EPC Solutions Ltd',
+    MERGE (c_tarun:Client {
+        id: 'client_tarun_solar',
+        name: 'Tarun CleanTech Solar EPC Solutions Ltd',
+        email: 'hackathon-demo@outlook.com',
         founded_date: '2013-04-12',
         legal_form: 'PUBLIC_LIMITED',
         turnover_fy24: 1400000000.0,
@@ -734,19 +796,25 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
         local_content_class: 'CLASS-1',
         is_blacklisted: false,
         tech_staff_count: 240,
-        portal_seller_id: 'TATASOLAR-GEM-011'
+        portal_seller_id: 'TARUNSOLAR-GEM-011'
     })
-    MERGE (c_tata)-[:WORKS_IN]->(wc_sol)
-    MERGE (c_tata)-[:WORKS_IN]->(wc_elec)
-    MERGE (c_tata)-[:HAS_SPECIALIZATION]->(s_sol)
-    MERGE (c_tata)-[:HAS_SPECIALIZATION]->(s_ht)
-    MERGE (c_tata)-[:HOLDS_CERT {valid_until: 1893456000}]->(c_iso)
-    MERGE (c_tata)-[:AUTHORIZED_FOR {role: 'Strategic EPC Partner', territory: 'All India', valid_until: 1893456000}]->(b_sch)
-    MERGE (c_tata)-[:AUTHORIZED_FOR {role: 'High Voltage Transmission Partner', territory: 'All India', valid_until: 1893456000}]->(b_abb)
-    MERGE (c_tata)-[:OPERATES_IN {gstin: '27TTTTT0000T1Z1', gst_valid: true, filing_status: 'ACTIVE'}]->(r_mh)
-    MERGE (c_tata)-[:OPERATES_IN {gstin: '29TTTTT0000T1Z7', gst_valid: true, filing_status: 'ACTIVE'}]->(r_kar)
-    MERGE (c_tata)-[:OPERATES_IN {gstin: '24TTTTT0000T1Z5', gst_valid: true, filing_status: 'ACTIVE'}]->(r_gj)
-    MERGE (c_tata)-[:OPERATES_IN {gstin: '08TTTTT0000T1Z3', gst_valid: true, filing_status: 'ACTIVE'}]->(r_rj)
+    MERGE (c_tarun)-[:WORKS_IN]->(wc_sol)
+    MERGE (c_tarun)-[:WORKS_IN]->(wc_elec)
+    MERGE (c_tarun)-[:HAS_SPECIALIZATION]->(s_sol)
+    MERGE (c_tarun)-[:HAS_SPECIALIZATION]->(s_ht)
+    MERGE (c_tarun)-[:HOLDS_CERT {valid_until: 1893456000}]->(c_iso)
+    MERGE (c_tarun)-[:HOLDS_CERT {valid_until: 1893456000}]->(c_bis)
+    MERGE (c_tarun)-[:AUTHORIZED_FOR {role: 'Strategic EPC Partner', territory: 'All India', valid_until: 1893456000, is_demo_authorization: true}]->(b_hav)
+    MERGE (c_tarun)-[:AUTHORIZED_FOR {role: 'Strategic EPC Partner', territory: 'All India', valid_until: 1893456000, is_demo_authorization: true}]->(b_sch)
+    MERGE (c_tarun)-[:AUTHORIZED_FOR {role: 'High Voltage Transmission Partner', territory: 'All India', valid_until: 1893456000, is_demo_authorization: true}]->(b_abb)
+    MERGE (c_tarun)-[:OPERATES_IN {gstin: '27TTTTT0000T1Z1', gst_valid: true, filing_status: 'ACTIVE'}]->(r_mh)
+    MERGE (c_tarun)-[:OPERATES_IN {gstin: '29TTTTT0000T1Z7', gst_valid: true, filing_status: 'ACTIVE'}]->(r_kar)
+    MERGE (c_tarun)-[:OPERATES_IN {gstin: '24TTTTT0000T1Z5', gst_valid: true, filing_status: 'ACTIVE'}]->(r_gj)
+    MERGE (c_tarun)-[:OPERATES_IN {gstin: '08TTTTT0000T1Z3', gst_valid: true, filing_status: 'ACTIVE'}]->(r_rj)
+
+    // Second winning anchor establishing >= 2 distinct historical winners for dept_hurl
+    MERGE (c_tarun)-[:BID_HISTORY {outcome: 'WON', bid_amount: 89000000.0, won_at: 1690000000}]->(t_past2)
+    MERGE (c_tarun)-[:DEPARTMENT_AFFINITY {wins: 2, losses: 1, win_rate: 0.6667, affinity_weight: 0.125}]->(d_hurl)
     """)
 
     # Client 12: Defaulter Infrastructure Corp (Blacklisted Defaulter)
@@ -761,6 +829,7 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     MERGE (c_defaulter:Client {
         id: 'client_defaulter',
         name: 'Defaulter Infrastructure Corp',
+        email: 'hackathon-demo@outlook.com',
         founded_date: '2011-09-01',
         legal_form: 'PRIVATE_LIMITED',
         turnover_fy24: 140000000.0,
@@ -871,7 +940,14 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
 
     graph.query("""
     MATCH (c:Client {id: 'client_bharat_it'})
-    MATCH (t:Tender {id: 'GEM/2026/R/751080'})
+    MERGE (t:Tender {id: 'GEM/2026/R/751080'})
+    ON CREATE SET t.title = 'Supply, Installation & Maintenance of Server Infrastructure and IT Hardware',
+                  t.tender_amount = 12500000.0,
+                  t.expected_turnover_3yr = 6000000.0,
+                  t.deadline_at = 1750000000,
+                  t.source_portal = 'GeM',
+                  t.status = 'ACTIVE',
+                  t.listed_date = '2026-10-12'
     MERGE (c)-[m:MATCHED_TENDER]->(t)
     SET m.match_score = 0.94,
         m.match_type = 'DIRECT',
@@ -891,8 +967,15 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     """)
 
     graph.query("""
-    MATCH (c:Client {id: 'client_voltas_hvac'})
-    MATCH (t:Tender {id: 'GEM/2026/R/750986'})
+    MATCH (c:Client {id: 'client_vardhan_hvac'})
+    MERGE (t:Tender {id: 'GEM/2026/R/750986'})
+    ON CREATE SET t.title = 'Comprehensive Maintenance and Servicing of Central HVAC and Chiller Plants',
+                  t.tender_amount = 8500000.0,
+                  t.expected_turnover_3yr = 4000000.0,
+                  t.deadline_at = 1750000000,
+                  t.source_portal = 'GeM',
+                  t.status = 'ACTIVE',
+                  t.listed_date = '2026-10-12'
     MERGE (c)-[m:MATCHED_TENDER]->(t)
     SET m.match_score = 0.91,
         m.match_type = 'DIRECT',
@@ -900,12 +983,12 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
         m.alert_count = 1,
         m.first_matched_at = 1700000000,
         m.last_alert_sent = 1700000000
-    MERGE (ad:AgentDecision {id: 'dec_seed_voltas'})
+    MERGE (ad:AgentDecision {id: 'dec_seed_vardhan'})
     SET ad.action = 'ALERT_SENT',
         ad.match_score = 0.91,
         ad.match_type = 'DIRECT',
-        ad.reasoning_trace = 'Direct Qualification: Voltas HVAC Systems satisfies 100% of AC Repair & Maintenance specifications and Daikin/Voltas OEM credentials.',
-        ad.path_summary = '(:Client {id: "client_voltas_hvac"})-[:DIRECT_MATCH]->(:Tender {id: "GEM/2026/R/750986"})',
+        ad.reasoning_trace = 'Direct Qualification: Vardhan HVAC Systems satisfies 100% of AC Repair & Maintenance specifications and OEM credentials.',
+        ad.path_summary = '(:Client {id: "client_vardhan_hvac"})-[:DIRECT_MATCH]->(:Tender {id: "GEM/2026/R/750986"})',
         ad.created_at = 1700000000
     MERGE (ad)-[:FOR_CLIENT]->(c)
     MERGE (ad)-[:EVALUATED_TENDER]->(t)
@@ -919,14 +1002,33 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
 
     # Normalize WorkCategory variations
     graph.query("""
-    MATCH (t:Tender)-[:IN_CATEGORY]->(wc:WorkCategory {name: 'IT hardware'})
-    MERGE (c:WorkCategory {name: 'IT Hardware'})
-    MERGE (t)-[:IN_CATEGORY]->(c)
-    """)
-    graph.query("""
-    MATCH (t:Tender)-[:IN_CATEGORY]->(wc:WorkCategory {name: 'Civil'})
+    MATCH (t)-[r:IN_CATEGORY]->(wc:WorkCategory)
+    WHERE wc.name IN ['Civil', 'civil']
     MERGE (c:WorkCategory {name: 'Civil Works'})
     MERGE (t)-[:IN_CATEGORY]->(c)
+    DELETE r
+    """)
+    graph.query("""
+    MATCH (c:Client)-[r:WORKS_IN]->(wc:WorkCategory)
+    WHERE wc.name IN ['Civil', 'civil']
+    MERGE (target:WorkCategory {name: 'Civil Works'})
+    MERGE (c)-[:WORKS_IN]->(target)
+    DELETE r
+    """)
+    graph.query("""
+    MATCH (wc:WorkCategory)
+    WHERE wc.name IN ['Civil', 'civil']
+    DETACH DELETE wc
+    """)
+    graph.query("""
+    MATCH (t)-[r:IN_CATEGORY]->(wc:WorkCategory {name: 'IT hardware'})
+    MERGE (c:WorkCategory {name: 'IT Hardware'})
+    MERGE (t)-[:IN_CATEGORY]->(c)
+    DELETE r
+    """)
+    graph.query("""
+    MATCH (wc:WorkCategory {name: 'IT hardware'})
+    DETACH DELETE wc
     """)
 
     # Query counts for summary
@@ -946,5 +1048,6 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
 
 
 if __name__ == "__main__":
-    result = seed_database()
+    force_clear = os.environ.get("FORCE_RESET", "false").lower() == "true" or "--force" in sys.argv
+    result = seed_database(clear_existing=force_clear)
     print("Seed complete:", result)

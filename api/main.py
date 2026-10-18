@@ -375,15 +375,30 @@ _frontend_dir = os.path.join(_base_dir, "frontend")
 if os.path.exists(_frontend_dir):
     app.mount("/static", StaticFiles(directory=_frontend_dir), name="static")
 
+    _no_cache_headers = {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
+
     @app.get("/")
     async def serve_dashboard():
-        return FileResponse(os.path.join(_frontend_dir, "index.html"))
+        return FileResponse(
+            os.path.join(_frontend_dir, "index.html"),
+            headers=_no_cache_headers,
+        )
 
     @app.get("/styles.css")
     async def serve_styles():
-        return FileResponse(os.path.join(_frontend_dir, "styles.css"))
+        return FileResponse(
+            os.path.join(_frontend_dir, "styles.css"),
+            headers=_no_cache_headers,
+        )
 
     @app.get("/app.js")
     async def serve_app_js():
-        return FileResponse(os.path.join(_frontend_dir, "app.js"))
+        return FileResponse(
+            os.path.join(_frontend_dir, "app.js"),
+            headers=_no_cache_headers,
+        )
 

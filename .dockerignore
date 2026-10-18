@@ -1,0 +1,38 @@
+# Version control & environments
+.git
+.gitignore
+.dockerignore
+venv
+env
+ENV
+.env
+
+# Python bytecode & cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Testing & coverage
+.pytest_cache
+.coverage
+htmlcov
+tests
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+.vscode
+.idea
+*.swp
+*.swo
+*.log
+
+# Scraper raw files & documentation drafts
+data/raw/*
+!data/raw/.gitkeep
+*.docx
+*.pdf
+build_summary_docs.py
+render.yaml
