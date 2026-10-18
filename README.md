@@ -21,7 +21,6 @@ BidGraphAI is architected from the ground up to address all 3 tracks of the **Fa
 | :--- | :--- | :--- |
 | **Track 1: Agents That Act on Connected Data** | A deterministic LangGraph workflow invokes parameterized MCP tools that use FalkorDB traversals for eligibility, historical-winner lookalikes, and JV candidate synthesis. The orchestration order is configured in code; the language model may summarize returned graph evidence but does not dynamically plan the tool sequence. | `discover_direct_and_lookalike_matches`, `check_client_coverage`, `find_peer_clients`, `explore_paths`, and `discover_jv_consortium_matches`. |
 | **Track 2: Agent Memory and Coordination** | Outcome feedback persists on graph relationships and updates department/category affinity weights. This is application-level persistent state and feedback learning; it is not a full episodic conversation-memory system. | `record_bid_outcome_and_learn`, `record_jv_outcome_and_learn`, and the alert cooldown. |
-| **Track 3: Company Brain** | The demo connects contractor profiles to capabilities, registrations, outcomes, and tenders. It does not ingest a broad set of internal company documents, tickets, or team knowledge. | Contractor capability graph and the graph explorer. |
 
 ---
 
@@ -464,7 +463,7 @@ pytest -v tests/
 
 ## 🎮 Walkthrough
 
-Follow this 2-minute walkthrough on **[http://localhost:8000](http://localhost:8000)**:
+Follow this 2-minute walkthrough on **[https://graphhacks-bidgraphai.onrender.com/]**:
 
 1. **Pull Active Tenders:** Click **"Refresh Tenders"** (top utility bar) to fetch active procurement opportunities from FalkorDB via FastMCP.
 2. **Run AI Tender Matching:** Click **"Run AI Tender Matching"** (hero gradient button). Notice how the autonomous dual-agent system matches:
