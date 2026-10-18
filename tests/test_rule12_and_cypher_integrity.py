@@ -1,8 +1,13 @@
 """Test suite for Rule 12 Cypher query validity, Laplace smoothing, idempotency, and privacy."""
 
+import os
+import sys
 import pytest
 import time
 import json
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from db.connection import get_graph
 from mcp_server.server import record_bid_outcome_and_learn, find_peer_clients, explore_paths
 from agent.communication_agent import CommunicationAgent

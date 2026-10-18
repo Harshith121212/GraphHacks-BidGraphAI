@@ -138,14 +138,25 @@ Evaluates met vs unmet statutory and capability nodes for an individual bidder:
 MATCH (t:Tender {id: $tender_id})
 MATCH (c:Client {id: $client_id})
 OPTIONAL MATCH (t)-[:LOCATED_IN]->(tr:Region)<-[op:OPERATES_IN]-(c)
+WITH t, c, op,
+     [(t)-[:IN_CATEGORY]->(wc:WorkCategory) | wc.name] AS t_cats,
+     [(c)-[:WORKS_IN]->(wc:WorkCategory) | wc.name] AS c_cats,
+     [(t)-[:PREFERS_BRAND]->(b:Brand) | b.name] AS t_brands,
+     [(c)-[:AUTHORIZED_FOR]->(b:Brand) | b.name] AS c_brands,
+     [(t)-[:REQUIRES_CERT]->(cert:Certification) | cert.name] AS t_certs,
+     [(c)-[:HOLDS_CERT]->(cert:Certification) | cert.name] AS c_certs,
+     [(t)-[:REQUIRES_PRODUCT]->(p:Product) | p.name] AS t_prods,
+     [(c)-[:SUPPLIES]->(p:Product) | p.name] AS c_prods
 RETURN c.id, c.name, c.avg_turnover_3yr, t.expected_turnover_3yr,
        c.is_msme, c.is_blacklisted, op.gst_valid,
-       [(t)-[:IN_CATEGORY]->(wc:WorkCategory)<-[:WORKS_IN]-(c) | wc.name] AS met_categories,
-       [(t)-[:IN_CATEGORY]->(wc:WorkCategory) WHERE NOT (c)-[:WORKS_IN]->(wc) | wc.name] AS unmet_categories,
-       [(t)-[:PREFERS_BRAND]->(b:Brand)<-[:AUTHORIZED_FOR]-(c) | b.name] AS met_brands,
-       [(t)-[:PREFERS_BRAND]->(b:Brand) WHERE NOT (c)-[:AUTHORIZED_FOR]->(b) | b.name] AS unmet_brands,
-       [(t)-[:REQUIRES_CERT]->(cert:Certification)<-[:HOLDS_CERT]-(c) | cert.name] AS met_certs,
-       [(t)-[:REQUIRES_CERT]->(cert:Certification) WHERE NOT (c)-[:HOLDS_CERT]->(cert) | cert.name] AS unmet_certs
+       [x IN t_cats WHERE x IN c_cats] AS met_categories,
+       [x IN t_cats WHERE NOT x IN c_cats] AS unmet_categories,
+       [x IN t_brands WHERE x IN c_brands] AS met_brands,
+       [x IN t_brands WHERE NOT x IN c_brands] AS unmet_brands,
+       [x IN t_certs WHERE x IN c_certs] AS met_certs,
+       [x IN t_certs WHERE NOT x IN c_certs] AS unmet_certs,
+       [x IN t_prods WHERE x IN c_prods] AS met_products,
+       [x IN t_prods WHERE NOT x IN c_prods] AS unmet_products
 ```
 
 #### 3. `get_department_lineage(client_id, department_id)`
@@ -343,17 +354,17 @@ pytest -v tests/
 
 Follow this 2-minute walkthrough on **[http://localhost:8000](http://localhost:8000)**:
 
-1. **Pull Active Tenders:** Click **"Pull Tender Data"** to fetch active procurement opportunities from FalkorDB via MCP.
-2. **Run Matching Loop:** Click **"Run Tender Matching Loop"**. Notice how the agent matches:
+1. **Pull Active Tenders:** Click **"Refresh Tenders"** (top utility bar) to fetch active procurement opportunities from FalkorDB via FastMCP.
+2. **Run AI Tender Matching:** Click **"Run AI Tender Matching"** (hero gradient button). Notice how the autonomous dual-agent system matches:
    - Direct 1-hop matches for `Surya Wire & Switchgear`.
    - 5-Hop Lookalike peers for `Apex Electricals`.
    - High-synergy Joint Venture (JV) Consortium pair for `Kaveri Civil` + `Surya Wire`.
 3. **Inspect Agent Reasoning:** Read the graph-grounded reasoning traces explaining turnover calculations, OEM brand authorization validity, and GST territorial compliance.
-4. **Test Cooldown Enforcement:** Click **"Run Tender Matching Loop"** a second time. The FalkorDB engine blocks duplicate alerts because 48 hours have not elapsed.
+4. **Test Cooldown Enforcement:** Click **"Run AI Tender Matching"** a second time. The FalkorDB engine blocks duplicate alerts because 48 hours have not elapsed.
 5. **Test +48h Time-Jump Simulator:** Click **"+48h Time Jump"** in the top navigation bar. Run the loop again—cooldowns have expired and alerts re-dispatch!
 6. **Trigger the Memory Learning Loop:** Click **"Won"** on the alert for `Surya Wire`. Notice the **Learned Affinities Leaderboard** immediately updates the win rate and affinity weight for NTPC Karnataka Region.
 7. **Verify Terminal State Protection:** Trigger the matching loop once more—the tender marked "Won" is never re-alerted, respecting terminal contract state.
-8. **One-Click Demo Reset:** Click **"Reset"** to restore FalkorDB back to its pristine benchmark state via MCP.
+8. **One-Click Demo Reset:** Click **"Reset"** to restore FalkorDB back to its pristine benchmark state via FastMCP.
 
 ---
 
@@ -374,4 +385,11 @@ For step-by-step setup details, free FalkorDB Cloud configuration, and custom do
 ---
 
 ## 👥 Authors & Acknowledgments
-Built with ❤️ for the **FalkorDB Hackathon 2026** by the **BidGraphAI Team**.
+
+Built with ❤️ for the **GraphHacks Hackathon 2026** by the **Team Lightning_Blazers**.
+
+### Contributors:
+- **Harshith**: Created DB schema, Cypher commands, MCP server and tools, implemented AI agents
+- **Akanksha**: Created Dockerfile, quickstart file, deployment file and deployed it to Render
+- **AI**: Frontend and API implementation
+
