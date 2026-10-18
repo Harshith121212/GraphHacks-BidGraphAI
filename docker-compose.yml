@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  # FalkorDB Graph Database
+  falkordb:
+    image: falkordb/falkordb:latest
+    container_name: bidgraph-falkordb
+    ports:
+      - "6379:6379"
+    volumes:
+      - falkordb_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # BidGraphAI FastAPI Orchestrator, MCP Agent & Web Dashboard
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bidgraph-web
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - FALKORDB_HOST=falkordb
+      - FALKORDB_PORT=6379
+      - FALKORDB_GRAPH_NAME=tender_intel_graph
+      - AUTO_SEED=true
+    depends_on:
+      falkordb:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  falkordb_data:
+    driver: local
