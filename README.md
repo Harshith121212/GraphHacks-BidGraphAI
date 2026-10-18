@@ -368,22 +368,6 @@ Follow this 2-minute walkthrough on **[http://localhost:8000](http://localhost:8
 
 ---
 
-## 🌐 Production Deployment (Render)
-
-BidGraphAI is production-ready for **Render** (https://render.com) with automatic HTTPS, Docker execution, and low-latency graph queries on [FalkorDB Cloud](https://app.falkordb.cloud).
-
-### 🚀 1-Click Render Blueprint
-
-1. Push this repository to your GitHub account.
-2. In the [Render Dashboard](https://dashboard.render.com), click **New +** -> **Blueprint**.
-3. Connect your repository. Render automatically reads [`render.yaml`](./render.yaml).
-4. Enter your FalkorDB Cloud credentials (`FALKORDB_HOST`, `FALKORDB_PASSWORD`) and OpenRouter keys (`OPENROUTER_API_KEY_ALPHA`, `OPENROUTER_API_KEY_BETA`).
-5. Click **Apply**. Render will automatically build the container, verify connectivity, seed the initial graph data, and publish your live dashboard.
-
-For step-by-step setup details, free FalkorDB Cloud configuration, and custom domains, see [Render Deployment Guide](./DEPLOYMENT_RENDER.md).
-
----
-
 ## 👥 Authors & Acknowledgments
 
 Built with ❤️ for the **GraphHacks Hackathon 2026** by the **Team Lightning_Blazers**.
