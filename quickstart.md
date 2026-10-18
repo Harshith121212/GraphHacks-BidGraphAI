@@ -25,7 +25,7 @@ BidGraphAI is an autonomous tender matching and consortium intelligence engine b
 - **FalkorDB** as the high-performance in-memory graph database running OpenCypher queries.
 - **Model Context Protocol (FastMCP)** running over stdio JSON-RPC to expose discrete, parameterized Cypher templates to the agent layer with zero direct database driver imports.
 - **FastAPI Backend & Embedded Command Center** serving both REST APIs and the interactive D3.js force-directed graph UI on a single unified port (`8000`).
-- **Cognitive AI Synthesizers** (Dual NVIDIA Nemotron 3.5 & LangGraph) for multi-hop lookalike peer discovery, 5-stage Joint Venture (JV) consortium formation, and autonomous email alerting.
+- **Cognitive AI Synthesizers** (2 NVIDIA Nemotron 3.5 powered agents & LangGraph) for multi-hop lookalike peer discovery, 5-stage Joint Venture (JV) consortium formation and autonomous email alerting.
 
 ```
 ┌────────────────────────────────────────────────────────┐
@@ -63,8 +63,8 @@ Before you begin, ensure you have:
 | **Python** | 3.11+ | **Option B** (Local native development) |
 
 ### 🔑 Optional API Keys (For Live AI Inference)
-BidGraphAI runs fully deterministically out of the box with built-in heuristic graph logic. To enable live neural reasoning and personalized alert email drafting, obtain free API keys:
-- **OpenRouter API Key** (for NVIDIA Nemotron 3.5 Super VL): [openrouter.ai](https://openrouter.ai)
+BidGraphAI runs fully deterministically out of the box with built-in graph logic. To enable live neural reasoning and alert email drafting, obtain free API keys:
+- **OpenRouter API Key** (for NVIDIA Nemotron 3.5 Super VL): [openrouter.ai](https://openrouter.ai) (free endpoint)
 - **Google Gemini API Key** (optional for email dispatch agent): [aistudio.google.com](https://aistudio.google.com)
 
 ---
