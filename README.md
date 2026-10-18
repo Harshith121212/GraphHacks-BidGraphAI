@@ -350,7 +350,7 @@ pytest -v tests/
 
 ---
 
-## 🎮 Judge Interactive Evaluation Walkthrough
+## 🎮 Walkthrough
 
 Follow this 2-minute walkthrough on **[http://localhost:8000](http://localhost:8000)**:
 
@@ -375,5 +375,5 @@ Built with ❤️ for the **GraphHacks Hackathon 2026** by the **Team Lightning_
 ### Contributors:
 - **Harshith**: Created DB schema, Cypher commands, MCP server and tools, implemented AI agents
 - **Akanksha**: Created Dockerfile, quickstart file, deployment file and deployed it to Render
-- **AI**: Frontend and API implementation
+- **AI**: Frontend, creating test cases and API implementation
 
