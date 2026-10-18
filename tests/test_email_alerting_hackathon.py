@@ -40,11 +40,14 @@ def setup_email_tests():
 def test_all_clients_have_hackathon_demo_email():
     """Verify all clients in the FalkorDB graph have email set to hackathon-demo@outlook.com."""
     graph = get_graph("tender_intel_graph")
-    res = graph.query("MATCH (c:Client) RETURN c.id, c.name, c.email").result_set
+    res = graph.query("MATCH (c:Client) RETURN c.id, c.name, c.email, c.data_origin").result_set
     assert len(res) >= 12, "Expected at least 12 clients in graph"
     for r in res:
-        cid, cname, email = r[0], r[1], r[2]
-        assert email == "hackathon-demo@outlook.com", f"Client {cid} ({cname}) email is {email}, expected 'hackathon-demo@outlook.com'"
+        cid, cname, email, data_origin = r[0], r[1], r[2], r[3]
+        if data_origin == "SYNTHETIC_DEMO":
+            assert email.endswith("@example.invalid"), f"Synthetic demo client {cid} must use a non-deliverable email"
+        else:
+            assert email == "hackathon-demo@outlook.com", f"Client {cid} ({cname}) has email {email}, expected 'hackathon-demo@outlook.com'"
 
 
 def test_send_single_alert_endpoint_payload():

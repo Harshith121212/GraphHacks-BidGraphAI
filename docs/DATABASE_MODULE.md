@@ -67,7 +67,7 @@ The `db/` package is structured into three specialized submodules:
 ```
 db/
 ├── __init__.py        # Package exports exposing singleton accessors and schema initializers
-├── connection.py      # Thread-safe Singleton managing client lifecycle, TLS, and pooling
+├── connection.py      # Per-process cached FalkorDB client, graph selection, TLS configuration
 ├── schema.py          # 15 node property index specifications and idempotent creation
 └── seed_graph.py      # Tender ingestion, contractor roster, and cold-start memory preserver
 ```
@@ -76,15 +76,16 @@ db/
 
 ### 2.1 `db/connection.py` — Singleton Connection Manager
 
-[`db/connection.py`](../db/connection.py) implements a thread-safe **Singleton** pattern ensuring that only a single FalkorDB client instance exists per Python process. It transparently supports both local Docker environments and encrypted FalkorDB Cloud instances.
+[`db/connection.py`](../db/connection.py) implements a **Singleton-style cached client** per Python process and supports local Docker environments and FalkorDB Cloud. The current implementation does not use a lock, so singleton/client initialization is not guaranteed thread-safe under concurrent first access.
 
 #### Key Implementation Details:
 
-1. **Thread-Safe Singleton Pattern**:
+1. **Singleton-Style Client Cache**:
    ```python
    class FalkorDBConnection:
        _instance: Optional["FalkorDBConnection"] = None
        _client: Optional[FalkorDB] = None
+       _lock = RLock()
 
        def __new__(cls) -> "FalkorDBConnection":
            if cls._instance is None:
@@ -96,10 +97,10 @@ db/
    - **URL-Based**: When `settings.FALKORDB_URL` is configured (e.g., `falkor://user:pass@host:port`), `FalkorDB.from_url()` is used directly.
    - **Parameter-Based**: When individual environment variables are supplied (`FALKORDB_HOST`, `FALKORDB_PORT`, `FALKORDB_PASSWORD`, `FALKORDB_SSL`), connection arguments are constructed dynamically.
 
-3. **Cloud TLS Configuration & Verification-First Security**:
+3. **Cloud TLS Configuration**:
    All communication over the public internet to FalkorDB Cloud uses TLS encryption (`ssl=True`). BidGraphAI adopts a **Verification-First** architecture (`FALKORDB_SSL_VERIFY = True` by default):
-   - Strict SSL certificate and hostname verification is attempted first during socket handshake.
-   - If certificate validation fails due to cloud provider dynamic multi-tenant subdomains (e.g., AWS wildcard mismatch), the driver automatically falls back to TLS encrypted transport without hostname checking, logging an explicit security notice (see detailed analysis in [SECURITY.md](SECURITY.md)):
+   - Certificate and hostname verification are enabled by default.
+   - If a deployment must disable verification, it must set `FALKORDB_SSL_VERIFY=false` explicitly. This retains encryption but does not verify the server identity.
    ```python
    if settings.FALKORDB_SSL:
        connection_kwargs["ssl"] = True
@@ -150,7 +151,7 @@ db/
 | `AgentDecision` | `id` | Autonomous decision trace auditing and deduplication |
 | `SystemMeta` | `key` | System heartbeat and cold-start memory marker |
 
-#### Idempotency Guard:
+#### Repeatable Index Setup:
 Executing `CREATE INDEX` multiple times in FalkorDB raises an exception if the index already exists. [`initialize_schema()`](../db/schema.py) inspects the error message for `"already indexed"` or `"index already exists"`, converting would-be crashes into clean operational skips:
 
 ```python

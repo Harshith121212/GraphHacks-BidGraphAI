@@ -4,7 +4,6 @@ import os
 import sys
 import time
 import json
-import hashlib
 import logging
 import asyncio
 from contextlib import asynccontextmanager
@@ -406,71 +405,54 @@ class BidGraphMCPAgent:
         tool_plan: Optional[List[str]] = None,
         agent_header: Optional[str] = None,
     ) -> tuple[str, str]:
-        """
-        Synthesizes an executive agent reasoning trace combining financial checks,
-        discrete capability matches, AI-generated Cypher command, and winning plus points.
-        """
+        """Build a trace from returned graph evidence without inventing facts or queries."""
         cid = candidate["client_id"]
         cname = candidate["client_name"]
         t_id = tender_meta.get("id", "Unknown")
         t_title = tender_meta.get("title", "Government Tender")
-        t_dept = tender_meta.get("department", {}).get("name", tender_meta.get("department_name", "Procuring Entity"))
-
         matched_nodes = candidate.get("direct_matched_nodes", {})
         lookalike_peers = candidate.get("lookalike_peers", [])
-        affinity_boost = candidate.get("learned_affinity_boost", 0.0)
-
-        direct_cypher = (
-            f"MATCH (c:Client {{id: '{cid}'}}), (t:Tender {{id: '{t_id}'}})\n"
-            f"WHERE c.is_blacklisted = false AND c.avg_turnover_3yr >= t.expected_turnover_3yr * 0.70\n"
-            f"MATCH (c)-[r]->(req)<-[m]-(t)\n"
-            f"RETURN c, req, t"
-        )
-
-        direct_plus_points = [
-            f"Financial Headroom: 3-Year turnover ₹{candidate['avg_turnover_3yr']/1e7:.2f} Cr comfortably covers tender statutory threshold.",
-            f"Regional Tax Clearance: Valid GST registration in project zone with zero active non-compliance notices.",
-        ]
-        if matched_nodes.get("brands"):
-            direct_plus_points.append(f"OEM Brand Authorization: Direct authorized partner for {', '.join(matched_nodes['brands'])}.")
-        if matched_nodes.get("certifications"):
-            direct_plus_points.append(f"Certified Technical Quality: Holds verified certifications ({', '.join(matched_nodes['certifications'])}).")
-        if candidate.get("is_msme"):
-            direct_plus_points.append("MSME Statutory Policy: Eligible for tender fee/EMD waiver and price preference.")
-
         plan_str = " -> ".join(f"[{i+1}] {step}" for i, step in enumerate(tool_plan)) if tool_plan else "[1] get_tender_requirements -> [2] check_client_coverage -> [3] get_department_lineage -> [4] dispatch_tender_alert_with_trace"
-
+        score = float(candidate.get("match_score", 0.0))
+        score_parts = candidate.get("score_components", {})
+        turnover = float(candidate.get("avg_turnover_3yr") or 0.0)
+        required_turnover = tender_meta.get("expected_turnover_3yr")
+        if required_turnover is None:
+            financial_line = f"Recorded 3-year average turnover: ₹{turnover / 1e7:.2f} Cr; no tender turnover threshold was available."
+        else:
+            financial_line = (f"Recorded 3-year average turnover: ₹{turnover / 1e7:.2f} Cr; "
+                              f"tender threshold: ₹{float(required_turnover) / 1e7:.2f} Cr.")
+        evidence_lines = [
+            f"{kind.replace('_', ' ').title()}: {', '.join(map(str, values))}"
+            for kind, values in matched_nodes.items() if values
+        ] or ["No named capability nodes were returned for this candidate."]
         reasoning_lines = []
         if agent_header:
             reasoning_lines.append(agent_header)
         reasoning_lines.extend([
-            f"AI DIRECT GRAPH MATCHING & STATUTORY EVALUATION:",
+            "Graph-based tender fit evaluation:",
             f"TOOL SEQUENCE >> {plan_str}",
-            f"1. AI-GENERATED CYPHER COMMAND:",
-            f"   CYPHER >> {direct_cypher}",
-            f"2. MANDATORY STATUTORY FILTERS PASSED:",
-            f"   - 3-Year Average Turnover: ₹{candidate['avg_turnover_3yr']/1e7:.2f} Cr (exceeds tender requirement).",
-            f"   - Legal Status: Valid regional GST, Blacklisted: False, MSME: {candidate.get('is_msme', False)}.",
-            f"3. DECISIVE WINNING PLUS POINTS FOR {cname.upper()}:",
-            "\n".join([f"   • {p}" for p in direct_plus_points]),
-            f"4. AI AGENT DECISION: Dispatched direct tender alert with {round(candidate.get('match_score', 0.90) * 100)}% projected win probability.",
+            f"Candidate {cname} ({cid}) passed the matching query's hard eligibility filters for {t_title} ({t_id}).",
+            financial_line,
+            f"Deterministic heuristic fit score: {round(score * 100)}% (not a win probability).",
+            "Score components: "
+            f"capability coverage {round(float(score_parts.get('capability_coverage', 0.0)) * 100)}%, "
+            f"base fit {score_parts.get('base_fit', 0.0)}, lookalike boost {score_parts.get('lookalike_boost', 0.0)}, "
+            f"learned affinity boost {score_parts.get('learned_affinity_boost', 0.0)}.",
+            "Graph evidence returned:\n" + "\n".join(f"• {line}" for line in evidence_lines),
         ])
-
-        path_summary = f"{cid} -> Direct Match -> {t_id}"
+        graph_trace = candidate.get("graph_path_trace", "")
+        if graph_trace:
+            reasoning_lines.append(f"Relationship trace: {graph_trace}")
+        path_summary = graph_trace or f"{cid} -> graph-qualified fit -> {t_id}"
         if lookalike_peers:
             primary_peer = lookalike_peers[0]
-            peer_id = primary_peer.get("peer_id")
-            past_tender = primary_peer.get("past_tender_id", "Past Project")
-            dept = primary_peer.get("department", t_dept)
-            shared = primary_peer.get("shared_capabilities", [])
-            peer_ref = f"Benchmark-Ref-{hashlib.sha256(str(peer_id).encode()).hexdigest()[:8].upper()}" if peer_id else "Benchmark-Ref"
             reasoning_lines.append(
-                f"5. 5-HOP GRAPH TRAVERSAL & COMPETITIVE BENCHMARKING:\n"
-                f"   [System Traversal Reference: {peer_ref} (Confidential Benchmark Competitor - Details Redacted)]\n"
-                f"   AI Agent hopped across connected FalkorDB capability graph from a top-qualifying benchmark competitor who won past contract '{past_tender}' under {dept}.\n"
-                f"   Shared capability overlap: {', '.join(shared)}."
+                "Historical-winner lookalike signal: "
+                f"{primary_peer.get('supporting_anchors', 0)} qualifying anchors and "
+                f"{primary_peer.get('shared_capabilities_count', 0)} shared capability links. "
+                "Anchor identities and tender IDs are withheld."
             )
-            path_summary = f"{cid} -> Shared Caps: [{', '.join(shared[:3])}] <- [Benchmark Competitor (Identity Shielded)] -> Matched -> {t_id}"
 
         return "\n".join(reasoning_lines), path_summary
 
@@ -483,58 +465,29 @@ class BidGraphMCPAgent:
         tool_plan: Optional[List[str]] = None,
         agent_header: Optional[str] = None,
     ) -> tuple[str, str]:
-        """
-        Synthesizes AI reasoning for a lookalike peer client reached via multi-hop graph traversal.
-        Explains why peer_id was alerted based on multi-hop traversal from the primary qualifying anchor,
-        while strictly protecting the primary competitor's confidentiality (zero name/turnover leaks).
-        """
-        cid = candidate.get("client_id", "Unknown")
-        peer_id = peer.get("peer_id", cid)
+        """Explain the returned peer result without fabricating an executed query or facts."""
+        peer_id = peer.get("peer_id", "Unknown")
         peer_name = peer.get("peer_name", peer_id)
-        t_id = tender_meta.get("id", "Unknown")
-        t_title = tender_meta.get("title", "Government Tender")
-        t_dept = peer.get("department", tender_meta.get("department", {}).get("name", tender_meta.get("department_name", "Procuring Entity")))
-        past_tender = peer.get("past_tender_id", "Past Project")
-        shared = peer.get("shared_capabilities", [])
-        plus_points = peer.get("plus_points", [])
-
-        cypher_cmd = (
-            f"MATCH (t:Tender {{id: '{t_id}'}})-[:IN_CATEGORY|REQUIRES_CERT|PREFERS_BRAND]->(req)\n"
-            f"MATCH (req)<-[:IN_CATEGORY|HOLDS_CERT|AUTHORIZED_FOR]-(anchor:Client)\n"
-            f"MATCH (anchor)-[:IN_CATEGORY|HAS_SPECIALIZATION|HOLDS_CERT|AUTHORIZED_FOR]->(shared)<-[:IN_CATEGORY|HAS_SPECIALIZATION|HOLDS_CERT|AUTHORIZED_FOR]-(peer:Client {{id: '{peer_id}'}})\n"
-            f"WHERE peer.is_blacklisted = false\n"
-            f"RETURN peer, shared"
+        tender_id = tender_meta.get("id", "Unknown")
+        tender_title = tender_meta.get("title", "Government Tender")
+        shared_count = peer.get("shared_capabilities_count", len(peer.get("shared_capabilities", [])))
+        anchor_count = peer.get("supporting_anchors", 0)
+        fit = round(float(peer_score) * 100)
+        plan = " -> ".join(f"[{i + 1}] {step}" for i, step in enumerate(tool_plan or []))
+        lines = [
+            agent_header or "[GRAPH-GROUNDED LOOKALIKE EVIDENCE]",
+            f"Lookalike candidate: {peer_name} ({peer_id}) for {tender_title} ({tender_id}).",
+            f"The graph query returned {shared_count} shared capability links and {anchor_count} qualifying historical-winner anchors.",
+            f"Heuristic fit score: {fit}% (not a win probability).",
+            "Historical anchor identities and past tender IDs are withheld.",
+        ]
+        if plan:
+            lines.insert(1, f"TOOL SEQUENCE >> {plan}")
+        path_summary = (
+            f"{peer_id} -> {shared_count} shared capability links -> "
+            f"{anchor_count} identity-shielded historical-winner anchors -> {tender_id}"
         )
-
-        plus_bullets = "\n".join([f"   • {p}" for p in plus_points]) if plus_points else (
-            f"   • Direct technical alignment with required tender schedules across {', '.join(shared) if shared else 'core specifications'}.\n"
-            f"   • Active verified regional GST compliance in tender delivery jurisdiction.\n"
-            f"   • Class-1 Make-in-India local content preference under DPIIT public procurement norms.\n"
-            f"   • Strong financial solvency with unencumbered capacity for project execution."
-        )
-
-        peer_plan_str = " -> ".join(f"[{i+1}] {step}" for i, step in enumerate(tool_plan)) if tool_plan else "[1] get_tender_requirements -> [2] check_client_coverage -> [3] find_peer_clients -> [4] dispatch_tender_alert_with_trace"
-
-        reasoning_lines = []
-        if agent_header:
-            reasoning_lines.append(agent_header)
-        reasoning_lines.extend([
-            f"AI GRAPH-HOPPING MULTI-HOP DISCOVERY & WIN STRATEGY:",
-            f"TOOL SEQUENCE >> {peer_plan_str}",
-            f"1. PRIMARY QUALIFICATION ANCHOR: A top-tier market competitor initially qualified with highest probability for Tender '{t_title}' ({t_id}).",
-            f"2. AI CYPHER GENERATION & 5-HOP TRAVERSAL: AI Agent formulated and executed OpenCypher graph traversal across FalkorDB:",
-            f"   CYPHER >> {cypher_cmd}",
-            f"   - Hopped from anchor capability nodes to discover structural lookalike peer '{peer_name}' ({peer_id}).",
-            f"   - Connected Capabilities: {', '.join(shared) if shared else 'Core Technical Enlistments'}.",
-            f"3. STRICT BIDDER CONFIDENTIALITY (PRIVACY SHIELD):",
-            f"   [System Traversal Reference: Benchmark-Ref-{hashlib.sha256(str(cid).encode()).hexdigest()[:8].upper()} (Confidential Benchmark - Corporate Identity & Details Redacted)]",
-            f"   Anchor competitor corporate identity, name, and turnover are strictly masked to ensure competitive bid isolation.",
-            f"4. DECISIVE WINNING PLUS POINTS FOR {peer_name.upper()}:",
-            plus_bullets,
-            f"5. AI AGENT DECISION: Because {peer_name} mirrors the benchmark capability footprint AND holds decisive operational plus points, the AI Agent dispatched an exclusive lookalike tender alert with {round(peer_score * 100)}% projected fit.",
-        ])
-        path_summary = f"{peer_id} -> Shared Caps: [{', '.join(shared[:3])}] <- [Benchmark Competitor (Identity Shielded)] -> Matched -> {t_id}"
-        return "\n".join(reasoning_lines), path_summary
+        return "\n".join(lines), path_summary
 
     def _synthesize_jv_reasoning(
         self,
@@ -549,8 +502,19 @@ class BidGraphMCPAgent:
         fin = consortium["combined_financials"]
         t_id = tender_meta.get("id", "Unknown")
 
-        lead_caps = ", ".join(lead["contributed_nodes"].get("work_categories", [])) or "Primary Category"
-        partner_caps = ", ".join(partner["contributed_nodes"].get("work_categories", [])) or "Technical Category"
+        def capability_summary(client):
+            contributions = client.get("contributed_nodes", {})
+            return "; ".join(
+                f"{kind}: {', '.join(map(str, values))}"
+                for kind, values in contributions.items() if values
+            ) or "No capability nodes listed"
+
+        lead_caps = capability_summary(lead)
+        partner_caps = capability_summary(partner)
+        decision_tree = consortium.get("decision_tree", {})
+        stage2 = decision_tree.get("stage2_financial_aggregation", {})
+        stage3 = decision_tree.get("stage3_capability_union", {})
+        stage4 = decision_tree.get("stage4_regional_compliance", {})
 
         jv_plan_str = " -> ".join(f"[{i+1}] {step}" for i, step in enumerate(tool_plan)) if tool_plan else "[1] get_tender_requirements -> [2] check_client_coverage (unmet) -> [3] discover_jv_consortium_matches -> [4] dispatch_tender_alert_with_trace"
 
@@ -560,13 +524,15 @@ class BidGraphMCPAgent:
         reasoning_lines.extend([
             f"JOINT VENTURE (JV) CONSORTIUM MATCH FOR {t_id}:",
             f"TOOL SEQUENCE >> {jv_plan_str}",
-            f"Neither {lead['client_name']} nor {partner['client_name']} satisfied 100% of specifications independently.",
+            "The graph matcher returned this pair because the joint criteria passed; individual disqualification details are not included in this result.",
             f"- Lead Partner: {lead['client_name']} ({lead['client_id']}) contributes {lead_caps} and ₹{lead['avg_turnover_3yr']/1e7:.1f} Cr turnover.",
             f"- Consortium Partner: {partner['client_name']} ({partner['client_id']}) contributes {partner_caps} and ₹{partner['avg_turnover_3yr']/1e7:.1f} Cr turnover.",
-            f"- Combined Financials: Combined turnover of ₹{fin['combined_turnover']/1e7:.1f} Cr exceeds the ₹{fin['required_turnover']/1e7:.1f} Cr threshold.",
-            f"- Capability Coverage: The union of both partners covers 100% of Civil, Electrical, Brand, OEM, and Enlistment requirements.",
+            f"- Combined turnover: ₹{fin['combined_turnover']/1e7:.1f} Cr; required: ₹{fin['required_turnover']/1e7:.1f} Cr.",
+            f"- Other returned financial checks: {stage2.get('detail', 'No additional financial gate detail returned.')}",
+            f"- Capability union: {stage3.get('coverage_percentage', 0)}% as returned by the graph matcher.",
+            f"- Regional/blacklist evidence: {stage4.get('detail', 'No regional evidence returned.')}",
         ])
-        path_summary = f"JV Consortium: [{lead['client_id']} ({lead_caps})] + [{partner['client_id']} ({partner_caps})] -> 100% Coverage -> {t_id}"
+        path_summary = consortium.get("graph_path_trace") or f"JV Consortium: {lead['client_id']} + {partner['client_id']} -> {t_id}"
         return "\n".join(reasoning_lines), path_summary
 
     def _synthesize_jv_partner_reasoning(
@@ -593,14 +559,14 @@ class BidGraphMCPAgent:
         reasoning_lines.extend([
             f"JOINT VENTURE (JV) CONSORTIUM MATCH FOR {t_id} (CONSORTIUM PARTNER - 40%):",
             f"TOOL SEQUENCE >> {jv_plan_str}",
-            f"Neither {partner['client_name']} nor {lead['client_name']} satisfied 100% of specifications independently.",
+            "The graph matcher returned this pair because the joint criteria passed; individual disqualification details are not included in this result.",
             f"- Designated Role: {partner['client_name']} ({partner['client_id']}) designated as 40% Consortium Partner.",
             f"- Partner Contribution: Contributes {partner_caps} and ₹{partner['avg_turnover_3yr']/1e7:.1f} Cr turnover.",
             f"- Lead Partner: {lead['client_name']} ({lead['client_id']}) contributes {lead_caps} and ₹{lead['avg_turnover_3yr']/1e7:.1f} Cr turnover.",
-            f"- Combined Financials: Combined turnover of ₹{fin['combined_turnover']/1e7:.1f} Cr exceeds the ₹{fin['required_turnover']/1e7:.1f} Cr threshold.",
-            f"- Capability Coverage: The union of both partners covers 100% of Civil, Electrical, Brand, OEM, and Enlistment requirements.",
+            f"- Combined turnover: ₹{fin['combined_turnover']/1e7:.1f} Cr; required: ₹{fin['required_turnover']/1e7:.1f} Cr.",
+            f"- Capability coverage: {consortium.get('coverage_percentage', 0)}% as returned by the graph matcher.",
         ])
-        path_summary = f"JV Consortium: [{partner['client_id']} ({partner_caps})] + [{lead['client_id']} ({lead_caps})] -> 100% Coverage -> {t_id}"
+        path_summary = consortium.get("graph_path_trace") or f"JV Consortium: {partner['client_id']} + {lead['client_id']} -> {t_id}"
         return "\n".join(reasoning_lines), path_summary
 
 
@@ -610,125 +576,17 @@ class BidGraphMCPAgent:
         tender_meta: Dict[str, Any],
         tool_plan: Optional[List[str]] = None,
     ) -> tuple[str, str]:
+        """Return deterministic graph evidence instead of unsupported model embellishments.
+
+        The previous trace included a Cypher query that was not executed and asserted
+        facts that were not returned by the graph. Keep eligibility evidence auditable.
         """
-        Synthesizes an executive AI reasoning trace combining dynamic tool planning,
-        statutory financial checks, parameterized OpenCypher query, and LLM-generated plus points.
-        Invokes NVIDIA Nemotron 3.5 (Agent Alpha) with graceful fallback to deterministic reasoner.
-        """
-        fallback_trace, path_summary = self._synthesize_candidate_reasoning(
+        return self._synthesize_candidate_reasoning(
             candidate=candidate,
             tender_meta=tender_meta,
             tool_plan=tool_plan,
-            agent_header="[AGENT ALPHA - NVIDIA NEMOTRON 3.5]",
+            agent_header="[GRAPH-GROUNDED MATCH EVIDENCE]",
         )
-
-        if not self.llm and not self.openrouter_client:
-            return fallback_trace, path_summary
-
-        cid = candidate["client_id"]
-        cname = candidate["client_name"]
-        turnover_cr = candidate.get("avg_turnover_3yr", 0.0) / 1e7
-        is_msme = candidate.get("is_msme", False)
-        matched_nodes = candidate.get("direct_matched_nodes", {})
-        lookalike_peers = candidate.get("lookalike_peers", [])
-
-        t_id = tender_meta.get("id", "Unknown")
-        t_title = tender_meta.get("title", "Government Tender")
-        t_dept = tender_meta.get("department", {}).get("name", tender_meta.get("department_name", "Procuring Entity"))
-        t_exp_turnover_cr = tender_meta.get("expected_turnover_3yr", 0.0) / 1e7
-        t_loc = tender_meta.get("location", "India")
-        match_score = candidate.get("match_score", 0.90)
-
-        plan_str = " -> ".join(f"[{i+1}] {step}" for i, step in enumerate(tool_plan)) if tool_plan else "[1] get_tender_requirements -> [2] check_client_coverage -> [3] get_department_lineage -> [4] dispatch_tender_alert_with_trace"
-
-        direct_cypher = (
-            f"MATCH (c:Client {{id: '{cid}'}}), (t:Tender {{id: '{t_id}'}})\n"
-            f"WHERE c.is_blacklisted = false AND c.avg_turnover_3yr >= t.expected_turnover_3yr * 0.70\n"
-            f"MATCH (c)-[r]->(req)<-[m]-(t)\n"
-            f"RETURN c, req, t"
-        )
-
-        prompt = (
-            f"You are the Chief Procurement AI Agent evaluating an Indian Government tender match on FalkorDB.\n"
-            f"Client Candidate:\n"
-            f"- ID: {cid}\n"
-            f"- Name: {cname}\n"
-            f"- 3-Year Avg Turnover: Rs {turnover_cr:.2f} Cr\n"
-            f"- MSME Status: {is_msme}\n"
-            f"- Matched Categories: {', '.join(matched_nodes.get('work_categories', [])) or 'General Engineering'}\n"
-            f"- Matched Certifications: {', '.join(matched_nodes.get('certifications', [])) or 'Standard Statutory Compliance'}\n"
-            f"- Matched Brands/OEM: {', '.join(matched_nodes.get('brands', [])) or 'Authorized OEM Partner'}\n\n"
-            f"Tender Requirements:\n"
-            f"- ID: {t_id}\n"
-            f"- Title: {t_title}\n"
-            f"- Department: {t_dept}\n"
-            f"- Location: {t_loc}\n"
-            f"- Expected Turnover Threshold: Rs {t_exp_turnover_cr:.2f} Cr\n"
-            f"- Match Score: {round(match_score * 100)}%\n\n"
-            f"Executed Dynamic Tool Sequence: {plan_str}\n\n"
-            f"Synthesize 3-4 decisive, high-impact winning plus points for {cname} specific to this tender.\n"
-            f"Each plus point MUST start with a bullet '• ' followed by a bold category header and 1-2 sentence justification.\n"
-            f"Format strictly as:\n"
-            f"• Financial Headroom: ...\n"
-            f"• Technical & Brand Alignment: ...\n"
-            f"• Statutory / MSME / Regional Advantage: ...\n"
-        )
-
-        try:
-            raw_text = await self._alpha_call_model_async(
-                prompt=prompt,
-                system_prompt="You are an expert Indian Government procurement AI reasoning engine on FalkorDB.",
-            )
-            plus_points = []
-            if raw_text:
-                for line in raw_text.split("\n"):
-                    sline = line.strip()
-                    if sline.startswith("•") or sline.startswith("*") or sline.startswith("-"):
-                        cleaned_pt = sline.lstrip("•*- ").strip()
-                        if cleaned_pt:
-                            plus_points.append(f"• {cleaned_pt}")
-
-            if not plus_points:
-                plus_points = [
-                    f"• Financial Headroom: 3-Year turnover ₹{turnover_cr:.2f} Cr comfortably exceeds statutory tender threshold of ₹{t_exp_turnover_cr:.2f} Cr.",
-                    f"• Statutory Compliance: Active GST registration in project zone with zero non-compliance notices.",
-                ]
-                if is_msme:
-                    plus_points.append("• MSME Statutory Policy: Eligible for tender fee/EMD waiver and price preference.")
-
-            ai_reasoning_lines = [
-                f"[AGENT ALPHA - NVIDIA NEMOTRON 3.5]",
-                f"AI DIRECT GRAPH MATCHING & STATUTORY EVALUATION:",
-                f"TOOL SEQUENCE >> {plan_str}",
-                f"1. AI-GENERATED CYPHER COMMAND:",
-                f"   CYPHER >> {direct_cypher}",
-                f"2. MANDATORY STATUTORY FILTERS PASSED:",
-                f"   - 3-Year Average Turnover: ₹{turnover_cr:.2f} Cr (exceeds tender requirement of ₹{t_exp_turnover_cr:.2f} Cr).",
-                f"   - Legal Status: Valid regional GST, Blacklisted: False, MSME: {is_msme}.",
-                f"3. DECISIVE WINNING PLUS POINTS FOR {cname.upper()}:",
-                "\n".join([f"   {p}" for p in plus_points]),
-                f"4. AI AGENT DECISION: Dispatched direct tender alert with {round(match_score * 100)}% projected win probability.",
-            ]
-
-            if lookalike_peers:
-                primary_peer = lookalike_peers[0]
-                peer_id = primary_peer.get("peer_id")
-                past_tender = primary_peer.get("past_tender_id", "Past Project")
-                dept = primary_peer.get("department", t_dept)
-                shared = primary_peer.get("shared_capabilities", [])
-                peer_ref = f"Benchmark-Ref-{hashlib.sha256(str(peer_id).encode()).hexdigest()[:8].upper()}" if peer_id else "Benchmark-Ref"
-                ai_reasoning_lines.append(
-                    f"5. 5-HOP GRAPH TRAVERSAL & COMPETITIVE BENCHMARKING:\n"
-                    f"   [System Traversal Reference: {peer_ref} (Confidential Benchmark Competitor - Details Redacted)]\n"
-                    f"   AI Agent hopped across connected FalkorDB capability graph from a top-qualifying benchmark competitor who won past contract '{past_tender}' under {dept}.\n"
-                    f"   Shared capability overlap: {', '.join(shared)}."
-                )
-
-            return "\n".join(ai_reasoning_lines), path_summary
-
-        except Exception as exc:
-            logger.warning("Agent Alpha synthesis for candidate %s failed: %s. Using fallback.", cid, exc)
-            return fallback_trace, path_summary
 
     async def _ai_synthesize_lookalike_peer_reasoning(
         self,
@@ -738,103 +596,11 @@ class BidGraphMCPAgent:
         peer_score: float,
         tool_plan: Optional[List[str]] = None,
     ) -> tuple[str, str]:
-        """
-        Synthesizes AI reasoning for a lookalike peer client reached via multi-hop graph traversal.
-        Uses NVIDIA Nemotron 3.5 (Agent Alpha) to explain the 5-hop graph discovery and formulate decisive plus points,
-        while strictly redacting the anchor competitor's identity.
-        """
-        fallback_trace, path_summary = self._synthesize_lookalike_peer_reasoning(
-            candidate=candidate,
-            peer=peer,
-            tender_meta=tender_meta,
-            peer_score=peer_score,
-            tool_plan=tool_plan,
-            agent_header="[AGENT ALPHA - NVIDIA NEMOTRON 3.5]",
+        """Format the structured peer result; do not let generated prose invent evidence."""
+        return self._synthesize_lookalike_peer_reasoning(
+            candidate, peer, tender_meta, peer_score, tool_plan,
+            agent_header="[GRAPH-GROUNDED LOOKALIKE EVIDENCE]",
         )
-
-        if not self.llm and not self.openrouter_client:
-            return fallback_trace, path_summary
-
-        cid = candidate["client_id"]
-        peer_id = peer["peer_id"]
-        peer_name = peer.get("peer_name", peer_id)
-        peer_turnover_cr = peer.get("turnover", 0.0) / 1e7
-        shared = peer.get("shared_capabilities", [])
-
-        t_id = tender_meta.get("id", "Unknown")
-        t_title = tender_meta.get("title", "Government Tender")
-        t_dept = peer.get("department", tender_meta.get("department", {}).get("name", tender_meta.get("department_name", "Procuring Entity")))
-        t_amount_cr = tender_meta.get("tender_amount", 0.0) / 1e7
-
-        peer_plan_str = " -> ".join(f"[{i+1}] {step}" for i, step in enumerate(tool_plan)) if tool_plan else "[1] get_tender_requirements -> [2] check_client_coverage -> [3] find_peer_clients -> [4] dispatch_tender_alert_with_trace"
-
-        cypher_cmd = (
-            f"MATCH (t:Tender {{id: '{t_id}'}})-[:IN_CATEGORY|REQUIRES_CERT|PREFERS_BRAND]->(req)\n"
-            f"MATCH (req)<-[:IN_CATEGORY|HOLDS_CERT|AUTHORIZED_FOR]-(anchor:Client)\n"
-            f"MATCH (anchor)-[:IN_CATEGORY|HAS_SPECIALIZATION|HOLDS_CERT|AUTHORIZED_FOR]->(shared)<-[:IN_CATEGORY|HAS_SPECIALIZATION|HOLDS_CERT|AUTHORIZED_FOR]-(peer:Client {{id: '{peer_id}'}})\n"
-            f"WHERE peer.is_blacklisted = false\n"
-            f"RETURN peer, shared"
-        )
-
-        prompt = (
-            f"You are the Chief Procurement AI Agent on FalkorDB Graph Database.\n"
-            f"A multi-hop graph traversal hopped from a top-tier anchor competitor to discover lookalike peer: {peer_name} ({peer_id}).\n"
-            f"Tender: {t_title} ({t_id}) under {t_dept}, Estimated Value: Rs {t_amount_cr:.2f} Cr.\n"
-            f"Shared Capabilities in Graph: {', '.join(shared) if shared else 'Core Technical Qualifications'}.\n"
-            f"Peer 3-Year Avg Turnover: Rs {peer_turnover_cr:.2f} Cr.\n"
-            f"Local Content Class: {peer.get('local_content_class', 'CLASS-1')}.\n\n"
-            f"CRITICAL PRIVACY RULE: Do NOT disclose or mention the anchor competitor's company name or ID.\n"
-            f"Synthesize 3-4 decisive winning plus points for {peer_name} for this tender.\n"
-            f"Each plus point MUST start with a bullet '• ' followed by a bold category header.\n"
-            f"Format strictly as:\n"
-            f"• Technical & Standard Alignment: ...\n"
-            f"• Regional Advantage & Solvency: ...\n"
-            f"• Make-in-India Preference: ...\n"
-        )
-
-        try:
-            raw_text = await self._alpha_call_model_async(
-                prompt=prompt,
-                system_prompt="You are an expert Indian Government procurement AI reasoning engine on FalkorDB.",
-            )
-            plus_points = []
-            if raw_text:
-                for line in raw_text.split("\n"):
-                    sline = line.strip()
-                    if sline.startswith("•") or sline.startswith("*") or sline.startswith("-"):
-                        cleaned_pt = sline.lstrip("•*- ").strip()
-                        if cleaned_pt:
-                            plus_points.append(f"• {cleaned_pt}")
-
-            if not plus_points:
-                plus_points = [
-                    f"• Direct technical alignment with required tender schedules across {', '.join(shared) if shared else 'core specifications'}.",
-                    f"• Active verified regional GST compliance in tender delivery jurisdiction.",
-                    f"• Class-1 Make-in-India local content preference under DPIIT public procurement norms.",
-                    f"• Strong financial solvency with unencumbered capacity for project execution.",
-                ]
-
-            reasoning_lines = [
-                f"[AGENT ALPHA - NVIDIA NEMOTRON 3.5]",
-                f"AI GRAPH-HOPPING MULTI-HOP DISCOVERY & WIN STRATEGY:",
-                f"TOOL SEQUENCE >> {peer_plan_str}",
-                f"1. PRIMARY QUALIFICATION ANCHOR: A top-tier market competitor initially qualified with highest probability for Tender '{t_title}' ({t_id}).",
-                f"2. AI CYPHER GENERATION & 5-HOP TRAVERSAL: AI Agent formulated and executed OpenCypher graph traversal across FalkorDB:",
-                f"   CYPHER >> {cypher_cmd}",
-                f"   - Hopped from anchor capability nodes to discover structural lookalike peer '{peer_name}' ({peer_id}).",
-                f"   - Connected Capabilities: {', '.join(shared) if shared else 'Core Technical Enlistments'}.",
-                f"3. STRICT BIDDER CONFIDENTIALITY (PRIVACY SHIELD):",
-                f"   [System Traversal Reference: Benchmark-Ref-{hashlib.sha256(str(cid).encode()).hexdigest()[:8].upper()} (Confidential Benchmark - Corporate Identity & Details Redacted)]",
-                f"   Anchor competitor corporate identity, name, and turnover are strictly masked to ensure competitive bid isolation.",
-                f"4. DECISIVE WINNING PLUS POINTS FOR {peer_name.upper()}:",
-                "\n".join([f"   {p}" for p in plus_points]),
-                f"5. AI AGENT DECISION: Because {peer_name} mirrors the benchmark capability footprint AND holds decisive operational plus points, the AI Agent dispatched an exclusive lookalike tender alert with {round(peer_score * 100)}% projected fit.",
-            ]
-            return "\n".join(reasoning_lines), path_summary
-
-        except Exception as exc:
-            logger.warning("Agent Alpha synthesis for peer %s failed: %s. Using fallback.", peer_id, exc)
-            return fallback_trace, path_summary
 
     async def _ai_synthesize_jv_reasoning(
         self,
@@ -843,6 +609,10 @@ class BidGraphMCPAgent:
         tool_plan: Optional[List[str]] = None,
     ) -> tuple[str, str]:
         """Synthesizes AI reasoning trace for the Lead Partner of a Joint Venture (JV) consortium."""
+        return self._synthesize_jv_reasoning(consortium, tender_meta, tool_plan,
+                                              agent_header="[GRAPH-GROUNDED JV EVIDENCE]")
+        # Legacy model-generated content below is intentionally unreachable: it made
+        # eligibility claims that were not present in the structured graph result.
         fallback_trace, path_summary = self._synthesize_jv_reasoning(
             consortium=consortium,
             tender_meta=tender_meta,
@@ -910,6 +680,9 @@ class BidGraphMCPAgent:
         tool_plan: Optional[List[str]] = None,
     ) -> tuple[str, str]:
         """Synthesizes AI reasoning trace for the Consortium Partner (40%) of a Joint Venture."""
+        return self._synthesize_jv_partner_reasoning(consortium, tender_meta, tool_plan,
+                                                     agent_header="[GRAPH-GROUNDED JV EVIDENCE]")
+        # Legacy model-generated content below is intentionally unreachable.
         fallback_trace, path_summary = self._synthesize_jv_partner_reasoning(
             consortium=consortium,
             tender_meta=tender_meta,
@@ -977,98 +750,13 @@ class BidGraphMCPAgent:
         tender_meta: Dict[str, Any],
         tool_plan: Optional[List[str]] = None,
     ) -> tuple[str, str]:
-        """
-        Synthesizes AI reasoning using Agent Beta (Hugging Face NVIDIA Nemotron 3.5).
-        Falls back to Nemotron-structured statutory reasoning if provider quotas or billing restrict direct inference.
-        """
-        fallback_trace, path_summary = self._synthesize_candidate_reasoning(
+        """Use query results as the audit trace; model prose is not eligibility proof."""
+        return self._synthesize_candidate_reasoning(
             candidate=candidate,
             tender_meta=tender_meta,
             tool_plan=tool_plan,
-            agent_header="[AGENT BETA - NVIDIA NEMOTRON 3.5]",
+            agent_header="[GRAPH-GROUNDED MATCH EVIDENCE]",
         )
-
-        cid = candidate["client_id"]
-        cname = candidate["client_name"]
-        turnover_cr = candidate.get("avg_turnover_3yr", 0.0) / 1e7
-        is_msme = candidate.get("is_msme", False)
-        matched_nodes = candidate.get("direct_matched_nodes", {})
-        lookalike_peers = candidate.get("lookalike_peers", [])
-
-        t_id = tender_meta.get("id", "Unknown")
-        t_title = tender_meta.get("title", "Government Tender")
-        t_dept = tender_meta.get("department", {}).get("name", tender_meta.get("department_name", "Procuring Entity"))
-        t_exp_turnover_cr = tender_meta.get("expected_turnover_3yr", 0.0) / 1e7
-        match_score = candidate.get("match_score", 0.90)
-
-        plan_str = " -> ".join(f"[{i+1}] {step}" for i, step in enumerate(tool_plan)) if tool_plan else "[1] get_tender_requirements -> [2] check_client_coverage -> [3] get_department_lineage -> [4] dispatch_tender_alert_with_trace"
-
-        direct_cypher = (
-            f"MATCH (c:Client {{id: '{cid}'}}), (t:Tender {{id: '{t_id}'}})\n"
-            f"WHERE c.is_blacklisted = false AND c.avg_turnover_3yr >= t.expected_turnover_3yr * 0.70\n"
-            f"MATCH (c)-[r]->(req)<-[m]-(t)\n"
-            f"RETURN c, req, t"
-        )
-
-        prompt = (
-            f"Synthesize 3-4 decisive winning plus points for {cname} on tender '{t_title}' ({t_id}) under {t_dept}.\n"
-            f"Turnover: Rs {turnover_cr:.2f} Cr (Required: Rs {t_exp_turnover_cr:.2f} Cr). MSME: {is_msme}.\n"
-            f"Categories: {', '.join(matched_nodes.get('work_categories', []))}.\n"
-            f"Format strictly with bullets: • Financial Headroom: ... • Statutory / MSME Compliance: ... • Technical Alignment: ..."
-        )
-
-        raw_text = await self._nemotron_call_model_async(
-            prompt=prompt,
-            system_prompt="You are NVIDIA Nemotron 3.5 evaluating Indian Government tenders on FalkorDB."
-        )
-
-        plus_points = []
-        if raw_text:
-            for line in raw_text.split("\n"):
-                sline = line.strip()
-                if sline.startswith(("•", "*", "-")):
-                    cleaned_pt = sline.lstrip("•*- ").strip()
-                    if cleaned_pt:
-                        plus_points.append(f"• {cleaned_pt}")
-
-        if not plus_points:
-            plus_points = [
-                f"• Nemotron Statutory Audit: Average annual turnover ₹{turnover_cr:.2f} Cr satisfies tender liquidity benchmark of ₹{t_exp_turnover_cr:.2f} Cr with 0 financial encumbrances.",
-                f"• Technical & Category Alignment: Direct topological match in FalkorDB across {', '.join(matched_nodes.get('work_categories', [])) or 'Civil/Electrical/IT Works'}.",
-                f"• Statutory Integrity: Verified active GSTIN and zero debarment/blacklist records across GeM and CPPP portals.",
-            ]
-            if is_msme:
-                plus_points.append("• MSME Statutory Policy: Eligible for tender fee exemption and purchase preference.")
-
-        ai_reasoning_lines = [
-            f"[AGENT BETA - NVIDIA NEMOTRON 3.5]",
-            f"AI DIRECT GRAPH MATCHING & STATUTORY EVALUATION:",
-            f"TOOL SEQUENCE >> {plan_str}",
-            f"1. AI-GENERATED CYPHER COMMAND:",
-            f"   CYPHER >> {direct_cypher}",
-            f"2. MANDATORY STATUTORY FILTERS PASSED:",
-            f"   - 3-Year Average Turnover: ₹{turnover_cr:.2f} Cr (satisfies tender requirement of ₹{t_exp_turnover_cr:.2f} Cr).",
-            f"   - Legal Status: Valid regional GST, Blacklisted: False, MSME: {is_msme}.",
-            f"3. DECISIVE WINNING PLUS POINTS FOR {cname.upper()} (NEMOTRON REASONING):",
-            "\n".join([f"   {p}" for p in plus_points]),
-            f"4. AI AGENT DECISION: Dispatched direct tender alert with {round(match_score * 100)}% projected fit.",
-        ]
-
-        if lookalike_peers:
-            primary_peer = lookalike_peers[0]
-            peer_id = primary_peer.get("peer_id")
-            past_tender = primary_peer.get("past_tender_id", "Past Project")
-            dept = primary_peer.get("department", t_dept)
-            shared = primary_peer.get("shared_capabilities", [])
-            peer_ref = f"Benchmark-Ref-{hashlib.sha256(str(peer_id).encode()).hexdigest()[:8].upper()}" if peer_id else "Benchmark-Ref"
-            ai_reasoning_lines.append(
-                f"5. 5-HOP GRAPH TRAVERSAL & COMPETITIVE BENCHMARKING:\n"
-                f"   [System Traversal Reference: {peer_ref} (Confidential Benchmark Competitor - Details Redacted)]\n"
-                f"   Nemotron agent navigated FalkorDB capability graph from past contract '{past_tender}' under {dept}.\n"
-                f"   Shared capability overlap: {', '.join(shared)}."
-            )
-
-        return "\n".join(ai_reasoning_lines), path_summary
 
     async def _nemotron_synthesize_lookalike_peer_reasoning(
         self,
@@ -1078,79 +766,11 @@ class BidGraphMCPAgent:
         peer_score: float,
         tool_plan: Optional[List[str]] = None,
     ) -> tuple[str, str]:
-        """Synthesizes AI reasoning for lookalike peer client using Agent Beta (NVIDIA Nemotron 3.5)."""
-        fallback_trace, path_summary = self._synthesize_lookalike_peer_reasoning(
-            candidate=candidate,
-            peer=peer,
-            tender_meta=tender_meta,
-            peer_score=peer_score,
-            tool_plan=tool_plan,
-            agent_header="[AGENT BETA - NVIDIA NEMOTRON 3.5]",
+        """Format the structured peer result; do not let generated prose invent evidence."""
+        return self._synthesize_lookalike_peer_reasoning(
+            candidate, peer, tender_meta, peer_score, tool_plan,
+            agent_header="[GRAPH-GROUNDED LOOKALIKE EVIDENCE]",
         )
-
-        cid = candidate["client_id"]
-        peer_id = peer["peer_id"]
-        peer_name = peer.get("peer_name", peer_id)
-        peer_turnover_cr = peer.get("turnover", 0.0) / 1e7
-        shared = peer.get("shared_capabilities", [])
-
-        t_id = tender_meta.get("id", "Unknown")
-        t_title = tender_meta.get("title", "Government Tender")
-        t_amount_cr = tender_meta.get("tender_amount", 0.0) / 1e7
-
-        peer_plan_str = " -> ".join(f"[{i+1}] {step}" for i, step in enumerate(tool_plan)) if tool_plan else "[1] get_tender_requirements -> [2] check_client_coverage -> [3] find_peer_clients -> [4] dispatch_tender_alert_with_trace"
-
-        cypher_cmd = (
-            f"MATCH (t:Tender {{id: '{t_id}'}})-[:IN_CATEGORY|REQUIRES_CERT|PREFERS_BRAND]->(req)\n"
-            f"MATCH (req)<-[:IN_CATEGORY|HOLDS_CERT|AUTHORIZED_FOR]-(anchor:Client)\n"
-            f"MATCH (anchor)-[:IN_CATEGORY|HAS_SPECIALIZATION|HOLDS_CERT|AUTHORIZED_FOR]->(shared)<-[:IN_CATEGORY|HAS_SPECIALIZATION|HOLDS_CERT|AUTHORIZED_FOR]-(peer:Client {{id: '{peer_id}'}})\n"
-            f"WHERE peer.is_blacklisted = false\n"
-            f"RETURN peer, shared"
-        )
-
-        prompt = (
-            f"Synthesize 3 decisive winning plus points for peer client {peer_name} ({peer_id}) on tender '{t_title}' ({t_id}).\n"
-            f"Tender Amount: Rs {t_amount_cr:.2f} Cr. Peer Turnover: Rs {peer_turnover_cr:.2f} Cr. Shared Capabilities: {', '.join(shared)}.\n"
-            f"PRIVACY RULE: Do NOT disclose anchor competitor name."
-        )
-
-        raw_text = await self._nemotron_call_model_async(
-            prompt=prompt,
-            system_prompt="You are NVIDIA Nemotron 3.5 evaluating lookalike peer graph expansion."
-        )
-
-        plus_points = []
-        if raw_text:
-            for line in raw_text.split("\n"):
-                sline = line.strip()
-                if sline.startswith(("•", "*", "-")):
-                    cleaned_pt = sline.lstrip("•*- ").strip()
-                    if cleaned_pt:
-                        plus_points.append(f"• {cleaned_pt}")
-
-        if not plus_points:
-            plus_points = [
-                f"• Nemotron Structural Match: Direct capability equivalence across {', '.join(shared) if shared else 'core schedules'}.",
-                f"• Regional Standing: Verified solvency with active GST registration and execution capacity.",
-                f"• Policy Compliance: Qualified for Class-1 Make-in-India preference under DPIIT norms.",
-            ]
-
-        reasoning_lines = [
-            f"[AGENT BETA - NVIDIA NEMOTRON 3.5]",
-            f"AI GRAPH-HOPPING MULTI-HOP DISCOVERY & WIN STRATEGY:",
-            f"TOOL SEQUENCE >> {peer_plan_str}",
-            f"1. PRIMARY QUALIFICATION ANCHOR: Benchmark competitor qualified for Tender '{t_title}' ({t_id}).",
-            f"2. AI CYPHER GENERATION & 5-HOP TRAVERSAL: Nemotron formulated and executed OpenCypher graph traversal across FalkorDB:",
-            f"   CYPHER >> {cypher_cmd}",
-            f"   - Discovered structural lookalike peer '{peer_name}' ({peer_id}).",
-            f"   - Connected Capabilities: {', '.join(shared) if shared else 'Core Technical Enlistments'}.",
-            f"3. STRICT BIDDER CONFIDENTIALITY (PRIVACY SHIELD):",
-            f"   [System Traversal Reference: Benchmark-Ref-{hashlib.sha256(str(cid).encode()).hexdigest()[:8].upper()} (Confidential Benchmark - Corporate Identity & Details Redacted)]",
-            f"4. DECISIVE WINNING PLUS POINTS FOR {peer_name.upper()} (NEMOTRON REASONING):",
-            "\n".join([f"   {p}" for p in plus_points]),
-            f"5. AI AGENT DECISION: Dispatched lookalike tender alert with {round(peer_score * 100)}% projected fit.",
-        ]
-        return "\n".join(reasoning_lines), path_summary
 
     async def _nemotron_synthesize_jv_reasoning(
         self,
@@ -1159,6 +779,9 @@ class BidGraphMCPAgent:
         tool_plan: Optional[List[str]] = None,
     ) -> tuple[str, str]:
         """Synthesizes AI reasoning for JV Lead Partner using Agent Beta (NVIDIA Nemotron 3.5)."""
+        return self._synthesize_jv_reasoning(consortium, tender_meta, tool_plan,
+                                              agent_header="[GRAPH-GROUNDED JV EVIDENCE]")
+        # Legacy generated recommendations below are intentionally unreachable.
         fallback_trace, path_summary = self._synthesize_jv_reasoning(
             consortium=consortium,
             tender_meta=tender_meta,
@@ -1223,6 +846,9 @@ class BidGraphMCPAgent:
         tool_plan: Optional[List[str]] = None,
     ) -> tuple[str, str]:
         """Synthesizes AI reasoning for JV Consortium Partner using Agent Beta (NVIDIA Nemotron 3.5)."""
+        return self._synthesize_jv_partner_reasoning(consortium, tender_meta, tool_plan,
+                                                     agent_header="[GRAPH-GROUNDED JV EVIDENCE]")
+        # Legacy generated recommendations below are intentionally unreachable.
         fallback_trace, path_summary = self._synthesize_jv_partner_reasoning(
             consortium=consortium,
             tender_meta=tender_meta,
@@ -1347,6 +973,17 @@ class BidGraphMCPAgent:
                 )
                 tool_traces.append(p_trace)
                 tool_plan.append("find_peer_clients")
+                cand["_resolved_peers"] = []
+                for peer in p_data.get("peers", []):
+                    peer_coverage, peer_cov_trace = await self._call_tool(
+                        session,
+                        "check_client_coverage",
+                        {"client_id": peer.get("peer_id"), "tender_id": t_id},
+                    )
+                    tool_traces.append(peer_cov_trace)
+                    peer["coverage"] = peer_coverage
+                    if peer_coverage.get("is_eligible_solo") is True:
+                        cand["_resolved_peers"].append(peer)
 
             tool_plan.append("dispatch_tender_alert_with_trace")
             direct_or_lookalike_matches += 1
@@ -1364,7 +1001,7 @@ class BidGraphMCPAgent:
                     tool_plan=tool_plan,
                 )
 
-            match_type = "DIRECT_AND_LOOKALIKE" if cand.get("lookalike_peers") else "DIRECT"
+            match_type = "DIRECT"
 
             dispatch_data, trace = await self._call_tool(
                 session,
@@ -1410,12 +1047,12 @@ class BidGraphMCPAgent:
                 ))
 
             # Lookalike peers (if individual candidate peer IDs were returned)
-            lookalike_peers = cand.get("lookalike_peers", [])
+            lookalike_peers = cand.get("_resolved_peers", [])
             for peer in lookalike_peers:
                 peer_id = peer.get("peer_id")
                 if not peer_id or peer_id == cid:
                     continue
-                peer_score = round(min(0.95, max(0.60, match_score * 0.90)), 4)
+                peer_score = float(peer.get("match_score", 0.0))
                 if peer_score < min_score_threshold:
                     continue
 
@@ -1624,7 +1261,7 @@ class BidGraphMCPAgent:
         agent_type: str,
         now: int,
         min_score_threshold: float,
-    ) -> tuple[int, int, int, int, List[AgentDecisionRecord], List[ToolCallTrace]]:
+    ) -> tuple[int, int, int, int, List[AgentDecisionRecord], List[ToolCallTrace], List[str]]:
         """
         Processes a partitioned batch of tenders concurrently using the designated AI agent:
         - agent_type='alpha': Agent Alpha (NVIDIA Nemotron 3.5 Super VL - Key 1)
@@ -1634,13 +1271,14 @@ class BidGraphMCPAgent:
         agent_label = "Agent Alpha (NVIDIA Nemotron Key 1)" if agent_type == "alpha" else "Agent Beta (NVIDIA Nemotron Key 2)"
 
         results = []
+        execution_errors: List[str] = []
         async with self._connect_session() as session:
             sem = asyncio.Semaphore(5)
 
             async def _worker(t: Dict[str, Any]):
                 async with sem:
                     try:
-                        return await self._process_single_tender(
+                        result = await self._process_single_tender(
                             session=session,
                             t=t,
                             agent_type=agent_type,
@@ -1648,9 +1286,12 @@ class BidGraphMCPAgent:
                             now=now,
                             min_score_threshold=min_score_threshold,
                         )
+                        return (*result, [])
                     except Exception as err:
-                        logger.error("Failed processing tender %s: %s", t.get("id"), err)
-                        return (0, 0, 0, 0, [], [])
+                        tender_id = t.get("id", "unknown")
+                        logger.exception("Failed processing tender %s", tender_id)
+                        execution_errors.append(f"{tender_id}: {err}")
+                        return (0, 0, 0, 0, [], [], [])
 
             results = await asyncio.gather(*[_worker(t) for t in tenders])
 
@@ -1664,7 +1305,8 @@ class BidGraphMCPAgent:
             decisions.extend(r[4])
             tool_traces.extend(r[5])
 
-        return direct_or_lookalike_matches, jv_consortiums, alerts_dispatched, alerts_skipped, decisions, tool_traces
+        return (direct_or_lookalike_matches, jv_consortiums, alerts_dispatched,
+                alerts_skipped, decisions, tool_traces, execution_errors)
 
     async def run_tender_matching_loop(
         self,
@@ -1725,15 +1367,17 @@ class BidGraphMCPAgent:
         alpha_tender_ids = [t.get("id", str(i)) for i, t in enumerate(tenders_alpha)]
         beta_tender_ids = [t.get("id", str(i)) for i, t in enumerate(tenders_beta)]
         overlap_count = len(set(alpha_tender_ids).intersection(set(beta_tender_ids)))
+        execution_errors: List[str] = []
 
         # Step 3: Aggregate multi-agent results
-        for (d_matches, jv_matches, dispatched, skipped, batch_decisions, batch_traces) in batch_results:
+        for (d_matches, jv_matches, dispatched, skipped, batch_decisions, batch_traces, batch_errors) in batch_results:
             total_direct_or_lookalike_matches += d_matches
             total_jv_consortiums += jv_matches
             alerts_dispatched += dispatched
             alerts_skipped += skipped
             decisions.extend(batch_decisions)
             tool_traces.extend(batch_traces)
+            execution_errors.extend(batch_errors)
 
         active_agents = [
             "Agent Alpha (NVIDIA Nemotron 3.5 Super VL - Key 1)",
@@ -1756,6 +1400,7 @@ class BidGraphMCPAgent:
             alpha_tender_ids=alpha_tender_ids,
             beta_tender_ids=beta_tender_ids,
             overlap_count=overlap_count,
+            execution_errors=execution_errors,
         )
 
     async def record_outcome_feedback(

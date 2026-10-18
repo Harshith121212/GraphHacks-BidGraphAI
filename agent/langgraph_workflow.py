@@ -3,7 +3,6 @@
 import os
 import time
 import json
-import hashlib
 import logging
 from typing import TypedDict, List, Dict, Any, Optional
 
@@ -156,6 +155,18 @@ class BidGraphLangGraphOrchestrator:
                                 )
                                 traces.append(p_trace.model_dump())
                                 c["_peers"] = p_data
+                                eligible_peers = []
+                                for peer in p_data.get("peers", []):
+                                    peer_coverage, peer_cov_trace = await self.agent._call_tool(
+                                        session,
+                                        "check_client_coverage",
+                                        {"client_id": peer.get("peer_id"), "tender_id": tid},
+                                    )
+                                    traces.append(peer_cov_trace.model_dump())
+                                    peer["coverage"] = peer_coverage
+                                    if peer_coverage.get("is_eligible_solo") is True:
+                                        eligible_peers.append(peer)
+                                c["_resolved_peers"] = eligible_peers
                                 c_plan.append("find_peer_clients")
                             except Exception as exc:
                                 logger.warning("find_peer_clients failed: %s", exc)
@@ -207,6 +218,8 @@ class BidGraphLangGraphOrchestrator:
             c_name = c.get("client_name", c.get("client_id"))
             t_title = t.get("title", t.get("id"))
             score = c.get("match_score", 0.0)
+            coverage = c.get("_coverage", {})
+            evidence = c.get("graph_evidence", [])
             tool_plan = c.get("_tool_plan", ["get_tender_requirements", "check_client_coverage", "get_department_lineage", "dispatch_tender_alert_with_trace"])
             plan_str = " -> ".join(f"[{i+1}] {step}" for i, step in enumerate(tool_plan))
 
@@ -218,8 +231,10 @@ class BidGraphLangGraphOrchestrator:
                     f"Evaluate this tender match in 3 concise bullet points:\n"
                     f"- Client: {c_name} (Turnover: ₹{c.get('avg_turnover_3yr', 0)/1e7:.2f} Cr)\n"
                     f"- Tender: {t_title} (Expected Turnover: ₹{t.get('expected_turnover_3yr', 0)/1e7:.2f} Cr, Location: {t.get('location', 'India')})\n"
-                    f"- Graph Match Score: {round(score*100)}%\n"
-                    f"Highlight statutory compliance, capability alignment, and commercial win strategy."
+                    f"- Deterministic heuristic fit score: {round(score*100)}% (not a win probability)\n"
+                    f"- Graph evidence returned by the matching query: {json.dumps(evidence, ensure_ascii=False)}\n"
+                    f"- Coverage tool gates: {json.dumps(coverage.get('gates', {}), ensure_ascii=False)}\n"
+                    f"Summarize only these supplied facts. Do not infer or claim certifications, legal compliance, GST history, financial encumbrances, tender preferences, or win probability unless explicitly present above."
                 )
                 try:
                     if idx % 2 == 0:
@@ -233,7 +248,17 @@ class BidGraphLangGraphOrchestrator:
                             system_prompt="You are NVIDIA Nemotron 3.5 Agent Beta, 5-Hop Graph Lookalike & Technical Qualification Engine.",
                         )
                     if llm_text:
-                        reasoning = f"TOOL SEQUENCE >> {plan_str}\n\n{llm_text}"
+                        grounded_trace, _ = self.agent._synthesize_candidate_reasoning(
+                            candidate=c,
+                            tender_meta=t,
+                            tool_plan=tool_plan,
+                            agent_header="[GRAPH-GROUNDED MATCH EVIDENCE]",
+                        )
+                        reasoning = (
+                            f"{grounded_trace}\n\n"
+                            "AI-generated narrative summary (not eligibility evidence):\n"
+                            f"{llm_text}"
+                        )
                 except Exception as exc:
                     logger.warning("Nemotron LLM call failed, falling back: %s", exc)
 
@@ -254,13 +279,13 @@ class BidGraphLangGraphOrchestrator:
             })
 
             # Synthesize lookalike peers discovered through graph hopping with Nemotron
-            for peer in c.get("lookalike_peers", []):
+            for peer in c.get("_resolved_peers", []):
                 p_id = peer.get("peer_id")
                 if not p_id or p_id == c.get("client_id"):
                     continue
                 p_name = peer.get("peer_name", p_id)
-                shared_caps = peer.get("shared_capabilities", [])
-                p_score = round(min(0.95, max(0.60, score * 0.90)), 4)
+                shared_caps = peer.get("plus_points", [])
+                p_score = float(peer.get("match_score", 0.0))
                 peer_plan = [
                     "get_tender_requirements",
                     "check_client_coverage",
@@ -272,16 +297,13 @@ class BidGraphLangGraphOrchestrator:
                 peer_reasoning = None
                 if self.agent.client_alpha or self.agent.client_beta:
                     prompt = (
-                        f"You are NVIDIA Nemotron 3.5 AI Agent running on FalkorDB Graph Database.\n"
-                        f"The agent executed dynamic template tool plan: {peer_plan_str}\n"
-                        f"The AI Agent executed an OpenCypher graph traversal from a top-qualifying benchmark competitor to discover lookalike peer: {p_name} ({p_id}).\n"
+                        f"You are an assistant summarizing returned FalkorDB evidence.\n"
+                        f"Executed tool plan: {peer_plan_str}\n"
+                        f"The graph returned lookalike peer: {p_name} ({p_id}).\n"
                         f"- Tender: {t_title} (Estimated Value: ₹{t.get('tender_amount', 0)/1e7:.2f} Cr, Location: {t.get('location', 'India')})\n"
                         f"- Shared Capabilities in Graph: {', '.join(shared_caps)}\n\n"
                         f"CRITICAL PRIVACY RULE: Do NOT disclose or mention the benchmark competitor's identity or company name.\n"
-                        f"Structure your response with:\n"
-                        f"1. AI GRAPH HOPPING: Explain the multi-hop path and generated OpenCypher strategy used in FalkorDB.\n"
-                        f"2. CONFIDENTIALITY: Note that benchmark competitor details are strictly redacted.\n"
-                        f"3. WINNING PLUS POINTS FOR {p_name}: Detail 3-4 specific operational, statutory, and solvency strengths that give {p_name} an edge to win this tender."
+                        f"Summarize only the supplied facts. Do not claim a specific query/path, eligibility, legal compliance, solvency, or likelihood of winning. This is a heuristic fit, not a win probability."
                     )
                     try:
                         llm_text = await self.agent._nemotron_call_model_async(
@@ -289,11 +311,14 @@ class BidGraphLangGraphOrchestrator:
                             system_prompt="You are an expert Indian Government procurement AI reasoning engine on Graph DB.",
                         )
                         if llm_text:
-                            anchor_ref = f"Benchmark-Ref-{hashlib.sha256(str(c.get('client_id', '')).encode()).hexdigest()[:8].upper()}"
+                            p_syn, _ = self.agent._synthesize_lookalike_peer_reasoning(
+                                candidate=c, peer=peer, tender_meta=t, peer_score=p_score,
+                                tool_plan=peer_plan,
+                            )
                             peer_reasoning = (
-                                f"TOOL SEQUENCE >> {peer_plan_str}\n\n"
+                                f"{p_syn}\n\n"
                                 f"{llm_text}\n\n"
-                                f"[System Traversal Reference: {anchor_ref} (Confidential Benchmark - Details Redacted from Client Alert)]"
+                                "AI-generated narrative summary (not eligibility evidence)."
                             )
                     except Exception as exc:
                         logger.warning("Nemotron LLM call for lookalike peer failed: %s", exc)
@@ -333,7 +358,7 @@ class BidGraphLangGraphOrchestrator:
             jv_insight = None
             if self.agent.client_alpha or self.agent.client_beta:
                 prompt = (
-                    f"You are NVIDIA Nemotron 3.5 AI Agent. Summarize why this Joint Venture (JV) Consortium is a winning bid:\n"
+                    f"Summarize the returned Joint Venture (JV) graph match. Do not call it a winning bid or infer facts not supplied:\n"
                     f"- Lead: {lead.get('client_name')} (Turnover: ₹{lead.get('avg_turnover_3yr', 0)/1e7:.2f} Cr)\n"
                     f"- Partner: {partner.get('client_name')} (Turnover: ₹{partner.get('avg_turnover_3yr', 0)/1e7:.2f} Cr)\n"
                     f"- Combined Turnover: ₹{fin.get('combined_turnover', 0)/1e7:.2f} Cr (Required: ₹{fin.get('required_turnover', 0)/1e7:.2f} Cr)\n"
@@ -346,10 +371,10 @@ class BidGraphLangGraphOrchestrator:
                         system_prompt="You are NVIDIA Nemotron 3.5 Agent Beta, expert Government procurement syndicate strategist.",
                     )
                     if llm_text:
+                        jv_grounded, _ = self.agent._synthesize_jv_reasoning(jv, t, tool_plan=jv_plan)
                         jv_insight = (
-                            f"JOINT VENTURE (JV) CONSORTIUM MATCH FOR {t.get('id', 'Tender')}:\n"
-                            f"TOOL SEQUENCE >> {jv_plan_str}\n"
-                            f"- Combined Financials: Combined turnover of ₹{fin.get('combined_turnover', 0)/1e7:.1f} Cr exceeds the ₹{fin.get('required_turnover', 0)/1e7:.1f} Cr threshold.\n"
+                            f"{jv_grounded}\n\n"
+                            "AI-generated narrative summary (not eligibility evidence):\n"
                             f"{llm_text}"
                         )
                 except Exception as exc:
@@ -448,11 +473,11 @@ class BidGraphLangGraphOrchestrator:
                     logger.warning("Dispatch failed for %s on %s: %s", cid, tid, exc)
 
                 # Lookalike Peer Dispatched Alerts (Graph Hopping)
-                for peer in c.get("lookalike_peers", []):
+                for peer in c.get("_resolved_peers", []):
                     p_id = peer.get("peer_id")
                     if not p_id or p_id == cid:
                         continue
-                    p_score = round(min(0.95, max(0.60, score * 0.90)), 4)
+                    p_score = float(peer.get("match_score", 0.0))
                     if p_score < threshold:
                         continue
                     p_syn, p_path = self.agent._synthesize_lookalike_peer_reasoning(

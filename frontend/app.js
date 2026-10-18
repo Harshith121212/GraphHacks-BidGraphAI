@@ -704,8 +704,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let cleanedText = rawTrace;
 
-    // 1. AI evaluator badge
-    let evaluatingAgentBadge = `<span class="px-2 py-0.5 rounded text-[9px] font-mono font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 flex items-center gap-1"><i data-lucide="cpu" class="w-2.5 h-2.5 text-indigo-400"></i> NVIDIA Nemotron</span>`;
+    // Match traces are deterministic graph evidence; language-model text is only a summary.
+    const isGraphEvidenceTrace = rawTrace.includes('[GRAPH-GROUNDED MATCH EVIDENCE]');
+    let evaluatingAgentBadge = isGraphEvidenceTrace
+      ? `<span class="px-2 py-0.5 rounded text-[9px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1"><i data-lucide="network" class="w-2.5 h-2.5 text-emerald-400"></i> FalkorDB Graph Rules</span>`
+      : `<span class="px-2 py-0.5 rounded text-[9px] font-mono font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 flex items-center gap-1"><i data-lucide="cpu" class="w-2.5 h-2.5 text-indigo-400"></i> AI Narrative</span>`;
     cleanedText = cleanedText.replace(/\[AGENT BETA[^\]]*\]/gi, '').replace(/\[AGENT ALPHA[^\]]*\]/gi, '').trim();
 
     // 1b. Remove internal reference tag [System Traversal Reference: ...]
@@ -760,8 +763,8 @@ document.addEventListener('DOMContentLoaded', () => {
         ${toolSteps.length > 0 ? `
           <div class="bg-indigo-950/40 border border-indigo-500/30 rounded-lg p-2.5 space-y-1.5 font-mono text-[10px]">
             <div class="flex items-center justify-between text-indigo-400 font-semibold uppercase tracking-wider text-[9px] pb-1 border-b border-indigo-500/20">
-              <span class="flex items-center gap-1.5"><i data-lucide="git-commit" class="w-3.5 h-3.5 text-indigo-400"></i> AI Verification Workflow</span>
-              <span class="text-indigo-300/70 text-[9px]">Verified Steps</span>
+              <span class="flex items-center gap-1.5"><i data-lucide="git-commit" class="w-3.5 h-3.5 text-indigo-400"></i> MCP Workflow</span>
+              <span class="text-indigo-300/70 text-[9px]">Executed Steps</span>
             </div>
             <div class="flex items-center flex-wrap gap-1.5 text-slate-300 pt-0.5">
               ${toolSteps.map((step, idx) => `
@@ -864,7 +867,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const isTerminal = (status === 'WON' || status === 'LOST');
 
-      const agentBadgeHtml = `<span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 flex items-center gap-1"><i data-lucide="cpu" class="w-3 h-3 text-indigo-400"></i> NVIDIA Nemotron</span>`;
+      const agentBadgeHtml = `<span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 flex items-center gap-1"><i data-lucide="network" class="w-3 h-3 text-indigo-400"></i> Graph Decision + AI Summary</span>`;
 
       return `
         <div class="glass-card rounded-xl p-4 space-y-3 border ${
@@ -890,7 +893,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <!-- Score Pill -->
             <div class="text-right shrink-0">
               <div class="text-lg font-black ${scorePct >= 80 ? 'text-emerald-400' : 'text-indigo-400'} font-mono">${scorePct}%</div>
-              <div class="text-[10px] text-slate-400 uppercase tracking-wider font-mono">Match Score</div>
+              <div class="text-[10px] text-slate-400 uppercase tracking-wider font-mono">Heuristic Fit</div>
             </div>
           </div>
 
@@ -1438,10 +1441,15 @@ document.addEventListener('DOMContentLoaded', () => {
       const dispatched = data.alerts_dispatched ?? data.total_alerts_dispatched ?? 0;
       const jvs = data.jv_consortiums_found ?? 0;
       const blocked = data.alerts_skipped_cooldown_or_terminal ?? data.cooldown_blocks_enforced ?? 0;
+      const runErrors = data.execution_errors || [];
 
-      const msg = `Accelerated AI Matching Complete: Evaluated ${evaluated} tenders | Dispatched ${dispatched} alerts | Found ${jvs} JV partnerships`;
-      stopAIBuffering(true, msg);
-      showToast('AI Tender Matching Complete', msg, 'success');
+      const matches = data.direct_or_lookalike_matches_found ?? 0;
+      let msg = `Matching finished: evaluated ${evaluated} tenders, found ${matches} direct matches and ${jvs} JV partnerships, dispatched ${dispatched} alerts`;
+      if (!matches && !jvs && !dispatched) msg += '. No eligible matches were found.';
+      if (runErrors.length) msg += `. ${runErrors.length} tender(s) failed: ${runErrors.slice(0, 2).join(' | ')}`;
+      stopAIBuffering(runErrors.length === 0, msg);
+      showToast(runErrors.length ? 'AI Tender Matching Had Errors' : 'AI Tender Matching Complete', msg,
+        runErrors.length ? 'error' : (matches || jvs || dispatched ? 'success' : 'warning'));
       await fetchDashboard();
     } catch (err) {
       stopAIBuffering(false, err.message);

@@ -13,12 +13,12 @@ BidGraphAI encrypts all communication with external managed graph databases (e.g
 - **Constraint**: These dynamic endpoints do not present certificates signed with public wildcard SANs matching the AWS cluster URL.
 - **Handling**:
   - In `db/connection.py`, encrypted transport over TLS is strictly maintained (`ssl=True`).
-  - By default, `ssl_check_hostname=False` and `ssl_cert_reqs=None` are set to permit communication with instance-specific cloud hostnames without dropping the encrypted tunnel.
-  - In dedicated enterprise virtual private clouds (VPCs) or private CA environments, strict certificate validation can be enforced by setting:
+  - Certificate and hostname verification are enabled by default (`FALKORDB_SSL_VERIFY=true`). If the endpoint certificate does not validate, the connection fails rather than silently weakening verification.
+  - A deployment can explicitly disable verification by setting:
     ```bash
-    FALKORDB_SSL_VERIFY=true
+    FALKORDB_SSL_VERIFY=false
     ```
-  - This is a known cloud infrastructure constraint of the managed database provider rather than an application-level feature.
+    This leaves TLS encryption in place but does not authenticate the server certificate; use only when the endpoint cannot support strict verification and the risk is understood.
 
 ---
 
@@ -27,11 +27,9 @@ BidGraphAI encrypts all communication with external managed graph databases (e.g
 Under Indian public procurement regulations (Competition Act 2002 & General Financial Rules), an intelligence platform must never facilitate anti-competitive information exchange or leak proprietary bidder data (such as corporate turnover, bid history, or margin strategy) to competing contractors.
 
 ### Implementation:
-1. **Irreversible Traversal Tokenization**:
-   - In 5-hop graph traversals (`agent/mcp_agent.py` and `agent/langgraph_workflow.py`), when the system hops from an anchor winner to a structural peer, the anchor's corporate identity is replaced with an irreversible 8-character cryptographic token:
-     $$\text{Token} = \text{SHA256}(\text{client\_id})[:8].\text{upper()}$$
-   - The trace displays only:
-     `[System Traversal Reference: Benchmark-Ref-XXXXXX (Confidential Benchmark - Details Redacted)]`
+1. **Anchor Identity Withholding**:
+   - Lookalike query results return counts and shared-capability totals, not anchor client IDs or past tender IDs.
+   - The audit trace describes the aggregate signal and intentionally omits anchor identities. It does not rely on hashing client IDs as anonymization.
 2. **Strict Redaction in Peer Alerts**:
    - The peer contractor receives an alert derived from capability alignment (specifications, GST, DPIIT local content), but **zero** anchor company name, 3-year turnover, or past contract reference is ever returned to or displayed for the peer.
 3. **Automated Verification**:

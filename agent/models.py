@@ -133,6 +133,7 @@ class MatchingLoopResponse(BaseModel):
     alpha_tender_ids: Optional[List[str]] = Field(default_factory=list)
     beta_tender_ids: Optional[List[str]] = Field(default_factory=list)
     overlap_count: Optional[int] = 0
+    execution_errors: List[str] = Field(default_factory=list)
 
 
 class OutcomeFeedbackRequest(BaseModel):

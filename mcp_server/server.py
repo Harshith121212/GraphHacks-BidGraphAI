@@ -6,6 +6,7 @@ import time
 import json
 import uuid
 import logging
+import re
 from typing import Optional, Dict, Any, List
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -24,6 +25,32 @@ def _get_target_graph(graph_name: Optional[str] = None):
     settings = get_settings()
     target = graph_name or os.environ.get("FALKORDB_GRAPH_NAME", settings.FALKORDB_GRAPH_NAME)
     return get_graph(target)
+
+
+def _read_only_query_error(query: str) -> Optional[str]:
+    """Conservatively validate diagnostic Cypher before it reaches FalkorDB.
+
+    These endpoints are for read-only investigation. Core product operations use
+    dedicated parameterized MCP templates instead of accepting arbitrary Cypher.
+    """
+    scrubbed = re.sub(r"/\*[\s\S]*?\*/", " ", query)
+    scrubbed = re.sub(r"//[^\n]*", " ", scrubbed)
+    scrubbed = re.sub(r"'(?:\\.|''|[^'\\])*'|\"(?:\\.|\"\"|[^\"\\])*\"", " ", scrubbed)
+    normalized = scrubbed.strip()
+    if not normalized:
+        return "Cypher query is empty."
+    if normalized.count(";") > 1 or (";" in normalized and not normalized.endswith(";")):
+        return "Multiple Cypher statements are not allowed."
+    if not re.match(r"^(MATCH|OPTIONAL\s+MATCH)\b", normalized, flags=re.IGNORECASE):
+        return "Read-only diagnostic queries must begin with MATCH or OPTIONAL MATCH."
+    forbidden = re.search(
+        r"\b(CREATE|MERGE|SET|DELETE|DETACH|REMOVE|DROP|CALL|LOAD|FOREACH)\b",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if forbidden:
+        return f"Operation '{forbidden.group(1).upper()}' is not allowed in read-only Cypher diagnostics."
+    return None
 
 
 @mcp.tool()
@@ -229,6 +256,7 @@ def discover_direct_and_lookalike_matches(
       AND (t.expected_turnover_3yr IS NULL OR c.avg_turnover_3yr >= t.expected_turnover_3yr OR (c.is_msme = true AND t.msme_exempt_turnover = true))
       AND (t.min_net_worth IS NULL OR c.net_worth >= t.min_net_worth)
       AND (t.min_solvency IS NULL OR c.solvency >= t.min_solvency)
+      AND (t.max_ongoing_work_allowed IS NULL OR coalesce(c.ongoing_work_value, 0) <= t.max_ongoing_work_allowed)
       AND (t.min_tech_staff IS NULL OR c.tech_staff_count >= t.min_tech_staff)
       AND (t.min_local_content_class IS NULL OR t.min_local_content_class = 'CLASS-2' OR c.local_content_class = 'CLASS-1')
     OPTIONAL MATCH (c)-[m:MATCHED_TENDER]->(t)
@@ -259,13 +287,23 @@ def discover_direct_and_lookalike_matches(
     WITH t, d, r, c, twc, req_brands, [(t)-[pb:PREFERS_BRAND]->(b:Brand)<-[auth:AUTHORIZED_FOR]-(c) WHERE (auth.valid_until IS NULL OR auth.valid_until > $now) AND (auth.territory IN ['ALL_INDIA', 'All India', r.name]) | b] AS held_brands
     WHERE size(held_brands) = size(req_brands)
 
+    // Product requirements are a hard gate only when the notice explicitly requires
+    // OEM/authorized supply (per edge or tender-wide). Other BOQ overlap is scored below.
+    WITH t, d, r, c, twc,
+         [(t)-[rp:REQUIRES_PRODUCT]->(p:Product)
+          WHERE coalesce(t.oem_required, false) = true OR coalesce(rp.requires_oem_or_auth, false) = true | p] AS req_oem_products
+    WITH t, d, r, c, twc, req_oem_products,
+         [(t)-[rp:REQUIRES_PRODUCT]->(p:Product)<-[sp:SUPPLIES]-(c)
+          WHERE ((coalesce(rp.requires_oem_or_auth, false) = false AND coalesce(t.oem_required, false) = false) OR sp.is_oem = true) | p] AS held_oem_products
+    WHERE size(held_oem_products) = size(req_oem_products)
+
     OPTIONAL MATCH (c)-[:HAS_SPECIALIZATION]->(tspec:Specialization)<-[:REQUIRES_SPECIALIZATION]-(t)
     OPTIONAL MATCH (c)-[hc:HOLDS_CERT]->(tcert:Certification)<-[:REQUIRES_CERT]-(t)
       WHERE hc.valid_until IS NULL OR hc.valid_until > $now
     OPTIONAL MATCH (c)-[auth:AUTHORIZED_FOR]->(tb:Brand)<-[:PREFERS_BRAND]-(t)
       WHERE (auth.territory = r.name OR toUpper(replace(auth.territory, ' ', '_')) = 'ALL_INDIA') AND (auth.valid_until IS NULL OR auth.valid_until > $now)
-    OPTIONAL MATCH (c)-[sp:SUPPLIES]->(tp:Product)<-[:REQUIRES_PRODUCT]-(t)
-      WHERE t.oem_required = false OR sp.is_oem = true
+    OPTIONAL MATCH (c)-[sp:SUPPLIES]->(tp:Product)<-[rp:REQUIRES_PRODUCT]-(t)
+      WHERE ((coalesce(rp.requires_oem_or_auth, false) = false AND coalesce(t.oem_required, false) = false) OR sp.is_oem = true)
     OPTIONAL MATCH (c)-[en:ENLISTED_AS]->(tec:EnlistmentClass)<-[:REQUIRES_ENLISTMENT]-(t)
       WHERE en.valid_until IS NULL OR en.valid_until > $now
     OPTIONAL MATCH (c)-[da:DEPARTMENT_AFFINITY]->(d)
@@ -308,8 +346,6 @@ def discover_direct_and_lookalike_matches(
             len(matched_prods) +
             len(matched_enlist)
         )
-        base_match_ratio = direct_matched_count / total_req_count
-
         # 3. 5-Hop Lookalike Traversal (Shielded Anchor Analysis)
         # Groups by (client, anchor), requires >= 2 shared capabilities per anchor,
         # and requires >= 2 distinct supporting anchors who previously won in this department & category.
@@ -344,10 +380,9 @@ def discover_direct_and_lookalike_matches(
                 "shared_capabilities_count": total_shared_caps,
                 "department": dept_name,
                 "plus_points": [
-                    f"Technical Alignment: Capability profile mirrors {supporting_anchors} distinct historical contract winners in {dept_name}.",
-                    "Local Regional Advantage: Active GSTIN registration in tender jurisdiction with compliant filing history.",
-                    "Financial Solvency: Validated healthy working capital solvency buffer.",
-                    "Make-in-India Preference: DPIIT Class-1 Local Content (>50%) grants statutory purchase preference."
+                    f"Historical capability signal: {total_shared_caps} shared capability links across {supporting_anchors} qualifying winner anchors in {dept_name}.",
+                    "The candidate also passed the matching query's regional, financial, and credential gates.",
+                    "Historical anchor identities and past tender IDs are withheld."
                 ]
             })
 
@@ -376,19 +411,45 @@ def discover_direct_and_lookalike_matches(
         else:
             match_score = 0.0
 
-        # Build Graph Path Trace String
-        trace_parts = [f"(:Client {{id: '{cid}'}})"]
+        # Return relationship evidence that corresponds to the actual query patterns.
+        evidence_groups = [
+            ("WorkCategory", matched_wc, "WORKS_IN", "IN_CATEGORY"),
+            ("Specialization", matched_spec, "HAS_SPECIALIZATION", "REQUIRES_SPECIALIZATION"),
+            ("Certification", matched_cert, "HOLDS_CERT", "REQUIRES_CERT"),
+            ("Brand", matched_brands, "AUTHORIZED_FOR", "PREFERS_BRAND"),
+            ("Product", matched_prods, "SUPPLIES", "REQUIRES_PRODUCT"),
+            ("EnlistmentClass", matched_enlist, "ENLISTED_AS", "REQUIRES_ENLISTMENT"),
+        ]
+        graph_evidence = [
+            {"node_label": label, "node_name": name, "client_relationship": client_rel,
+             "tender_relationship": tender_rel}
+            for label, names, client_rel, tender_rel in evidence_groups
+            for name in (names or [])
+        ]
+        matched_capability_count = min(direct_matched_count, total_req_count)
+        capability_coverage = round(matched_capability_count / total_req_count, 4)
+        if matched_wc:
+            base_score = round(base_score, 4)
+        score_components = {
+            "method": "deterministic_heuristic_fit_score",
+            "capability_coverage": capability_coverage,
+            "base_fit": round(base_score, 4) if matched_wc or lookalike_peers else 0.0,
+            "lookalike_boost": round(lookalike_boost, 4),
+            "learned_affinity_boost": learned_affinity_boost,
+            "final_fit_score": match_score,
+            "is_win_probability": False,
+        }
+        trace_parts = [
+            f"(:Client {{id: '{cid}'}})-[:{item['client_relationship']}]->"
+            f"(:{item['node_label']} {{name: '{item['node_name']}'}})<-"
+            f"[:{item['tender_relationship']}]-(:Tender {{id: '{tender_id}'}})"
+            for item in graph_evidence
+        ]
+        graph_path_trace = " ; ".join(trace_parts) or "No direct capability path returned."
         if lookalike_peers:
-            primary_peer = lookalike_peers[0]
-            trace_parts.append(
-                f"-[:MIRRORS_WINNERS {{supporting_anchors: {primary_peer['supporting_anchors']}}}]-> "
-                f"(:Department {{name: '{primary_peer['department']}'}}) "
-                f"-[:ISSUED]-> (:Tender {{id: '{tender_id}'}})"
-            )
-        else:
-            trace_parts.append(
-                f"-[:DIRECT_CAPABILITY_MATCH]-> (Direct Nodes: {direct_matched_count}/{total_req_count}) "
-                f"-> (:Tender {{id: '{tender_id}'}})"
+            graph_path_trace += (
+                f" | Lookalike signal: {supporting_anchors} qualifying historical-winner anchors; "
+                "anchor identities and tender IDs are withheld."
             )
 
         candidates.append({
@@ -397,6 +458,8 @@ def discover_direct_and_lookalike_matches(
             "avg_turnover_3yr": avg_turnover,
             "is_msme": is_msme,
             "match_score": match_score,
+            "score_components": score_components,
+            "eligibility_status": "ELIGIBLE_FOR_MATCHING",
             "direct_matched_nodes": {
                 "work_categories": matched_wc,
                 "specializations": matched_spec,
@@ -406,8 +469,9 @@ def discover_direct_and_lookalike_matches(
                 "enlistment": matched_enlist,
             },
             "lookalike_peers": lookalike_peers,
+            "graph_evidence": graph_evidence,
             "learned_affinity_boost": learned_affinity_boost,
-            "graph_path_trace": " ".join(trace_parts),
+            "graph_path_trace": graph_path_trace,
         })
 
     # Sort descending by match score
@@ -442,6 +506,8 @@ def discover_jv_consortium_matches(
     # 1. Fetch Tender Requirements
     t_query = """
     MATCH (t:Tender {id: $tender_id})-[:LOCATED_IN]->(r:Region)
+    WHERE (t.status = 'ACTIVE' OR t.status IS NULL)
+      AND (t.deadline_at IS NULL OR t.deadline_at > $now)
     OPTIONAL MATCH (d:Department)-[:ISSUED]->(t)
     RETURN t.id,
            t.title,
@@ -451,16 +517,22 @@ def discover_jv_consortium_matches(
            [(t)-[:IN_CATEGORY]->(twc:WorkCategory) | twc.name] AS wc,
            [(t)-[:REQUIRES_SPECIALIZATION]->(tspec:Specialization) | tspec.name] AS spec,
            [(t)-[:REQUIRES_CERT]->(tcert:Certification) | tcert.name] AS cert,
-           [(t)-[:PREFERS_BRAND]->(tb:Brand) | tb.name] AS brands,
-           [(t)-[:REQUIRES_PRODUCT]->(tp:Product) | tp.name] AS prods,
-           [(t)-[:REQUIRES_ENLISTMENT]->(tec:EnlistmentClass) | tec.code] AS enlist
+           [(t)-[pb:PREFERS_BRAND]->(tb:Brand) WHERE pb.strict_auth_required = true | tb.name] AS brands,
+           [(t)-[rp:REQUIRES_PRODUCT]->(tp:Product)
+             WHERE coalesce(t.oem_required, false) = true OR coalesce(rp.requires_oem_or_auth, false) = true | tp.name] AS prods,
+           [(t)-[:REQUIRES_ENLISTMENT]->(tec:EnlistmentClass) | tec.code] AS enlist,
+           t.min_net_worth,
+           t.min_solvency,
+           t.min_tech_staff,
+           t.min_local_content_class,
+           t.max_ongoing_work_allowed
     """
-    t_res = graph.query(t_query, {"tender_id": tender_id})
+    t_res = graph.query(t_query, {"tender_id": tender_id, "now": now})
     if not t_res.result_set:
         return json.dumps({"error": f"Tender {tender_id} not found", "total_consortiums_found": 0, "consortiums": []})
 
     t_row = t_res.result_set[0]
-    expected_turnover = float(t_row[2])
+    expected_turnover = float(t_row[2] or 0.0)
     region_name = t_row[3]
     oem_required = bool(t_row[4])
 
@@ -470,6 +542,11 @@ def discover_jv_consortium_matches(
     req_brands = set(t_row[8])
     req_prods = set(t_row[9])
     req_enlist = set(t_row[10])
+    min_net_worth = float(t_row[11] or 0.0)
+    min_solvency = float(t_row[12] or 0.0)
+    min_tech_staff = int(t_row[13] or 0)
+    min_local_content_class = t_row[14]
+    max_ongoing_work = float(t_row[15]) if t_row[15] is not None else None
 
     total_requirements_count = (
         len(req_wc) + len(req_spec) + len(req_cert) +
@@ -487,8 +564,8 @@ def discover_jv_consortium_matches(
       WHERE hc.valid_until IS NULL OR hc.valid_until > $now
     OPTIONAL MATCH (c)-[auth:AUTHORIZED_FOR]->(tb:Brand)<-[:PREFERS_BRAND]-(t)
       WHERE (auth.territory = r.name OR toUpper(replace(auth.territory, ' ', '_')) = 'ALL_INDIA') AND (auth.valid_until IS NULL OR auth.valid_until > $now)
-    OPTIONAL MATCH (c)-[sp:SUPPLIES]->(tp:Product)<-[:REQUIRES_PRODUCT]-(t)
-      WHERE t.oem_required = false OR sp.is_oem = true
+    OPTIONAL MATCH (t)-[rp:REQUIRES_PRODUCT]->(tp:Product)<-[sp:SUPPLIES]-(c)
+      WHERE ((coalesce(rp.requires_oem_or_auth, false) = false AND coalesce(t.oem_required, false) = false) OR sp.is_oem = true)
     OPTIONAL MATCH (c)-[en:ENLISTED_AS]->(tec:EnlistmentClass)<-[:REQUIRES_ENLISTMENT]-(t)
       WHERE en.valid_until IS NULL OR en.valid_until > $now
     RETURN c.id AS cid,
@@ -502,7 +579,9 @@ def discover_jv_consortium_matches(
            collect(DISTINCT tcert.name) AS matched_cert,
            collect(DISTINCT tb.name) AS matched_brands,
            collect(DISTINCT tp.name) AS matched_prods,
-           collect(DISTINCT tec.code) AS matched_enlist
+           collect(DISTINCT tec.code) AS matched_enlist,
+           c.local_content_class AS local_content_class,
+           c.ongoing_work_value AS ongoing_work_value
     """
     c_res = graph.query(clients_query, {"tender_id": tender_id, "now": now})
 
@@ -517,11 +596,21 @@ def discover_jv_consortium_matches(
         c_brands = set(cr[9])
         c_prods = set(cr[10])
         c_enlist = set(cr[11])
-        c_turnover = float(cr[2])
+        c_turnover = float(cr[2] or 0.0)
+        c_net_worth = float(cr[3] or 0.0)
+        c_solvency = float(cr[4] or 0.0)
+        c_tech_staff = int(cr[5] or 0)
+        c_local_content = cr[12]
+        c_ongoing_work = float(cr[13] or 0.0)
 
         # Check if client satisfies 100% alone
         satisfies_alone = (
             c_turnover >= expected_turnover and
+            c_net_worth >= min_net_worth and
+            c_solvency >= min_solvency and
+            c_tech_staff >= min_tech_staff and
+            (max_ongoing_work is None or c_ongoing_work <= max_ongoing_work) and
+            (min_local_content_class in (None, "", "CLASS-2") or c_local_content == "CLASS-1") and
             norm_s(req_wc).issubset(norm_s(c_wc)) and
             norm_s(req_spec).issubset(norm_s(c_spec)) and
             norm_s(req_cert).issubset(norm_s(c_cert)) and
@@ -534,9 +623,11 @@ def discover_jv_consortium_matches(
             "id": cr[0],
             "name": cr[1],
             "turnover": c_turnover,
-            "net_worth": float(cr[3]),
-            "solvency": float(cr[4]),
-            "tech_staff": int(cr[5]),
+            "net_worth": c_net_worth,
+            "solvency": c_solvency,
+            "tech_staff": c_tech_staff,
+            "local_content_class": c_local_content,
+            "ongoing_work": c_ongoing_work,
             "wc": c_wc,
             "spec": c_spec,
             "cert": c_cert,
@@ -561,6 +652,18 @@ def discover_jv_consortium_matches(
             # Combined turnover check
             combined_turnover = c1["turnover"] + c2["turnover"]
             if combined_turnover < expected_turnover:
+                continue
+            if c1["net_worth"] + c2["net_worth"] < min_net_worth:
+                continue
+            if c1["solvency"] + c2["solvency"] < min_solvency:
+                continue
+            if c1["tech_staff"] + c2["tech_staff"] < min_tech_staff:
+                continue
+            if max_ongoing_work is not None and c1["ongoing_work"] + c2["ongoing_work"] > max_ongoing_work:
+                continue
+            if min_local_content_class not in (None, "", "CLASS-2") and (
+                c1["local_content_class"] != "CLASS-1" or c2["local_content_class"] != "CLASS-1"
+            ):
                 continue
 
             # Combined capability coverage check
@@ -624,16 +727,20 @@ def discover_jv_consortium_matches(
                         "partner_turnover_cr": round(partner["turnover"] / 1e7, 2),
                         "combined_turnover_cr": round(combined_turnover / 1e7, 2),
                         "required_turnover_cr": round(expected_turnover / 1e7, 2),
-                        "buffer_cr": round((combined_turnover - expected_turnover) / 1e7, 2),
                         "combined_net_worth_cr": round((lead["net_worth"] + partner["net_worth"]) / 1e7, 2),
+                        "required_net_worth_cr": round(min_net_worth / 1e7, 2),
                         "combined_solvency_cr": round((lead["solvency"] + partner["solvency"]) / 1e7, 2),
+                        "required_solvency_cr": round(min_solvency / 1e7, 2),
+                        "combined_tech_staff": lead["tech_staff"] + partner["tech_staff"],
+                        "required_tech_staff": min_tech_staff,
+                        "buffer_cr": round((combined_turnover - expected_turnover) / 1e7, 2),
                         "gate_passed": True,
-                        "detail": f"Combined 3-year turnover satisfies 100% of financial criteria with positive solvency buffer (Turnover Headroom: +₹{(combined_turnover - expected_turnover)/1e7:.2f} Cr)."
+                        "detail": f"Combined turnover, net worth, solvency, and technical staff meet the configured tender thresholds. Turnover headroom: +₹{(combined_turnover - expected_turnover)/1e7:.2f} Cr."
                     },
                     "stage3_capability_union": {
                         "title": "Stage 3: Multi-Hop Capability Union Gate",
-                        "lead_contributions": sorted(list(lead["wc"] | lead["spec"] | lead["brands"] | lead["prods"])),
-                        "partner_contributions": sorted(list(partner["wc"] | partner["spec"] | partner["brands"] | partner["prods"])),
+                        "lead_contributions": sorted(list(lead["wc"] | lead["spec"] | lead["cert"] | lead["brands"] | lead["prods"] | lead["enlist"])),
+                        "partner_contributions": sorted(list(partner["wc"] | partner["spec"] | partner["cert"] | partner["brands"] | partner["prods"] | partner["enlist"])),
                         "coverage_percentage": 100.0,
                         "gate_passed": True,
                         "detail": "Union of Work Categories, Specializations, Brands, and Products covers 100% of procurement specifications."
@@ -641,11 +748,11 @@ def discover_jv_consortium_matches(
                     "stage4_regional_compliance": {
                         "title": "Stage 4: Regional Registration & Compliance Gate",
                         "region": region_name,
-                        "lead_gst": f"Active GSTIN verified in {region_name}",
-                        "partner_gst": f"Active GSTIN verified in {region_name}",
-                        "blacklisting_status": "Passed (Zero debarment flags across both entities)",
+                        "lead_gst": f"Graph records a valid GST relationship in {region_name}",
+                        "partner_gst": f"Graph records a valid GST relationship in {region_name}",
+                        "blacklisting_status": "Both client nodes have is_blacklisted=false in the graph",
                         "gate_passed": True,
-                        "detail": "Both consortium members hold verified GSTINs and zero blacklisting records."
+                        "detail": "Both consortium members have valid regional GST relationships and no blacklist flag in the graph. These demo graph values are not external verification."
                     },
                     "stage5_governance_recommendation": {
                         "title": "Stage 5: Consortium Governance & Lead Designation",
@@ -1140,13 +1247,9 @@ def execute_read_cypher(
     Diagnostic tool: executes a read-only OpenCypher query against FalkorDB and returns JSON result rows.
     Mutating statements (CREATE, MERGE, SET, DELETE, DROP) are strictly rejected.
     """
-    forbidden_tokens = ["CREATE", "MERGE", "SET", "DELETE", "REMOVE", "DROP"]
-    upper_query = query.upper()
-    for token in forbidden_tokens:
-        if f" {token} " in f" {upper_query} ":
-            return json.dumps({
-                "error": f"Mutation token '{token}' is forbidden in read-only Cypher diagnostic tool."
-            })
+    validation_error = _read_only_query_error(query)
+    if validation_error:
+        return json.dumps({"error": validation_error})
 
     graph = _get_target_graph(graph_name)
     try:
@@ -1579,14 +1682,9 @@ def execute_cypher_traversal(
     explore connected nodes, verify client statutory plus points, and traverse lookalike paths.
     """
     clean_q = cypher_query.strip()
-    forbidden = ["DELETE", "DROP", "CREATE", "SET", "MERGE", "REMOVE"]
-    q_words = [w.strip().upper() for w in clean_q.split()]
-    for f in forbidden:
-        if f in q_words:
-            return json.dumps({
-                "error": f"Write/mutation operation '{f}' is prohibited in traversal query.",
-                "success": False
-            })
+    validation_error = _read_only_query_error(clean_q)
+    if validation_error:
+        return json.dumps({"error": validation_error, "success": False})
 
     try:
         params = json.loads(params_json) if params_json and isinstance(params_json, str) else (params_json or {})
@@ -1687,84 +1785,128 @@ def check_client_coverage(
     by a client for a given tender using an explainable, parameterized OpenCypher template.
     """
     graph = _get_target_graph(graph_name)
+    now = int(time.time())
     query = """
     MATCH (t:Tender {id: $tender_id})
     MATCH (c:Client {id: $client_id})
     OPTIONAL MATCH (t)-[:LOCATED_IN]->(tr:Region)<-[op:OPERATES_IN]-(c)
-    WITH t, c, op,
-         [(t)-[:IN_CATEGORY]->(wc:WorkCategory) | wc.name] AS t_cats,
-         [(c)-[:IN_CATEGORY]->(wc:WorkCategory) | wc.name] AS c_cats,
-         [(t)-[:PREFERS_BRAND]->(b:Brand) | b.name] AS t_brands,
-         [(c)-[:AUTHORIZED_FOR]->(b:Brand) | b.name] AS c_brands,
-         [(t)-[:REQUIRES_CERT]->(cert:Certification) | cert.name] AS t_certs,
-         [(c)-[:HOLDS_CERT]->(cert:Certification) | cert.name] AS c_certs,
-         [(t)-[:REQUIRES_PRODUCT]->(p:Product) | p.name] AS t_prods,
-         [(c)-[:SUPPLIES]->(p:Product) | p.name] AS c_prods
+    WITH t, c, collect(CASE WHEN op.gst_valid = true THEN tr.name ELSE null END) AS valid_regions
     RETURN c.id AS client_id,
            c.name AS client_name,
            c.avg_turnover_3yr AS client_turnover,
            t.expected_turnover_3yr AS required_turnover,
+           c.net_worth AS client_net_worth,
+           t.min_net_worth AS required_net_worth,
            c.solvency AS client_solvency,
+           t.min_solvency AS required_solvency,
+           c.tech_staff_count AS client_tech_staff,
+           t.min_tech_staff AS required_tech_staff,
            c.is_msme AS is_msme,
+           t.msme_exempt_turnover AS msme_exempt_turnover,
            c.is_blacklisted AS is_blacklisted,
            c.local_content_class AS local_content_class,
-           op.gst_valid AS gst_valid,
-           [x IN t_cats WHERE x IN c_cats] AS met_categories,
-           [x IN t_cats WHERE NOT x IN c_cats] AS unmet_categories,
-           [x IN t_brands WHERE x IN c_brands] AS met_brands,
-           [x IN t_brands WHERE NOT x IN c_brands] AS unmet_brands,
-           [x IN t_certs WHERE x IN c_certs] AS met_certs,
-           [x IN t_certs WHERE NOT x IN c_certs] AS unmet_certs,
-           [x IN t_prods WHERE x IN c_prods] AS met_products,
-           [x IN t_prods WHERE NOT x IN c_prods] AS unmet_products
+           t.min_local_content_class AS required_local_content_class,
+           t.status AS tender_status,
+           t.deadline_at AS deadline_at,
+           valid_regions,
+           [(t)-[:IN_CATEGORY]->(wc:WorkCategory) | wc.name] AS required_categories,
+           [(c)-[:WORKS_IN]->(wc:WorkCategory) | wc.name] AS client_categories,
+           [(t)-[:REQUIRES_SPECIALIZATION]->(s:Specialization) | s.name] AS required_specializations,
+           [(c)-[:HAS_SPECIALIZATION]->(s:Specialization) | s.name] AS client_specializations,
+           [(t)-[:REQUIRES_CERT]->(cert:Certification) | cert.name] AS required_certifications,
+           [(c)-[hc:HOLDS_CERT]->(cert:Certification) WHERE hc.valid_until IS NULL OR hc.valid_until > $now | cert.name] AS client_certifications,
+           [(t)-[pb:PREFERS_BRAND]->(b:Brand) WHERE pb.strict_auth_required = true | b.name] AS required_brands,
+           [(c)-[auth:AUTHORIZED_FOR]->(b:Brand)
+             WHERE (auth.valid_until IS NULL OR auth.valid_until > $now)
+               AND (auth.territory IN ['ALL_INDIA', 'All India'] OR auth.territory IN valid_regions
+                    OR toUpper(replace(auth.territory, ' ', '_')) = 'ALL_INDIA') | b.name] AS client_brands,
+           [(t)-[rp:REQUIRES_PRODUCT]->(p:Product)
+             WHERE coalesce(t.oem_required, false) = true OR coalesce(rp.requires_oem_or_auth, false) = true | p.name] AS required_products,
+           [(t)-[rp:REQUIRES_PRODUCT]->(p:Product)<-[sp:SUPPLIES]-(c)
+             WHERE ((coalesce(rp.requires_oem_or_auth, false) = false AND coalesce(t.oem_required, false) = false) OR sp.is_oem = true)
+             | p.name] AS client_products,
+           [(t)-[:REQUIRES_ENLISTMENT]->(ec:EnlistmentClass) | ec.code] AS required_enlistment,
+           [(c)-[en:ENLISTED_AS]->(ec:EnlistmentClass) WHERE en.valid_until IS NULL OR en.valid_until > $now | ec.code] AS client_enlistment,
+           c.ongoing_work_value,
+           t.max_ongoing_work_allowed
     """
-    res = graph.query(query, {"client_id": client_id, "tender_id": tender_id})
+    res = graph.query(query, {"client_id": client_id, "tender_id": tender_id, "now": now})
     if not res.result_set:
         return json.dumps({"error": f"Client '{client_id}' or Tender '{tender_id}' not found", "success": False})
     row = res.result_set[0]
-    client_turnover = float(row[2] or 0.0)
-    req_turnover = float(row[3] or 1.0)
-    turnover_coverage_pct = round(min(2.0, client_turnover / req_turnover) * 100, 1)
+    values = {"client_id": row[0], "client_name": row[1], "client_turnover": row[2],
+              "required_turnover": row[3], "client_net_worth": row[4], "required_net_worth": row[5],
+              "client_solvency": row[6], "required_solvency": row[7], "client_tech_staff": row[8],
+              "required_tech_staff": row[9], "is_msme": row[10], "msme_exempt_turnover": row[11],
+              "is_blacklisted": row[12], "local_content_class": row[13],
+              "required_local_content_class": row[14], "tender_status": row[15], "deadline_at": row[16],
+              "valid_regions": row[17] or [], "required_categories": row[18] or [],
+              "client_categories": row[19] or [], "required_specializations": row[20] or [],
+              "client_specializations": row[21] or [], "required_certifications": row[22] or [],
+              "client_certifications": row[23] or [], "required_brands": row[24] or [],
+              "client_brands": row[25] or [], "required_products": row[26] or [],
+              "client_products": row[27] or [], "required_enlistment": row[28] or [],
+              "client_enlistment": row[29] or [], "ongoing_work_value": row[30],
+              "max_ongoing_work_allowed": row[31]}
 
-    unmet_cats = row[10] or []
-    unmet_brands = row[12] or []
-    unmet_certs = row[14] or []
-    unmet_prods = row[16] or []
+    def missing(required, held):
+        held_norm = {str(value).strip().casefold() for value in held if value}
+        return [value for value in required if str(value).strip().casefold() not in held_norm]
 
-    missing_items = []
-    if turnover_coverage_pct < 100.0 and not row[5]:
-        missing_items.append(f"Turnover deficit (has {turnover_coverage_pct}%, needs 100%)")
-    for cat in unmet_cats:
-        missing_items.append(f"Missing category capability: {cat}")
-    for b in unmet_brands:
-        missing_items.append(f"Missing OEM Brand authorization: {b}")
-    for c in unmet_certs:
-        missing_items.append(f"Missing technical certification: {c}")
+    turnover = float(values["client_turnover"] or 0.0)
+    required_turnover = values["required_turnover"]
+    turnover_ok = (required_turnover is None or turnover >= float(required_turnover)
+                   or (values["is_msme"] is True and values["msme_exempt_turnover"] is True))
+    turnover_pct = (round(turnover / float(required_turnover) * 100, 1)
+                    if required_turnover not in (None, 0) else 100.0)
+    region_ok = bool(values["valid_regions"])
+    local_class_ok = (values["required_local_content_class"] in (None, "", "CLASS-2")
+                      or values["local_content_class"] == "CLASS-1")
+    deadline_ok = values["deadline_at"] is None or float(values["deadline_at"]) > now
+    status_ok = values["tender_status"] in (None, "ACTIVE")
 
-    is_eligible_solo = (len(missing_items) == 0 and not row[6])
-
+    missing_nodes = {
+        "categories": missing(values["required_categories"], values["client_categories"]),
+        "specializations": missing(values["required_specializations"], values["client_specializations"]),
+        "certifications": missing(values["required_certifications"], values["client_certifications"]),
+        "brands": missing(values["required_brands"], values["client_brands"]),
+        "products": missing(values["required_products"], values["client_products"]),
+        "enlistment": missing(values["required_enlistment"], values["client_enlistment"]),
+    }
+    gates = {
+        "tender_active": {"passed": status_ok, "evidence": values["tender_status"]},
+        "deadline_open": {"passed": deadline_ok, "evidence": values["deadline_at"]},
+        "not_blacklisted": {"passed": values["is_blacklisted"] is False, "evidence": values["is_blacklisted"]},
+        "regional_gst": {"passed": region_ok, "evidence": values["valid_regions"]},
+        "turnover": {"passed": turnover_ok, "client_value": turnover,
+                      "required_value": required_turnover, "coverage_pct": turnover_pct,
+                      "msme_exemption_applied": bool(values["is_msme"] and values["msme_exempt_turnover"])},
+        "net_worth": {"passed": values["required_net_worth"] is None or float(values["client_net_worth"] or 0) >= float(values["required_net_worth"]),
+                      "client_value": values["client_net_worth"], "required_value": values["required_net_worth"]},
+        "solvency": {"passed": values["required_solvency"] is None or float(values["client_solvency"] or 0) >= float(values["required_solvency"]),
+                     "client_value": values["client_solvency"], "required_value": values["required_solvency"]},
+        "technical_staff": {"passed": values["required_tech_staff"] is None or int(values["client_tech_staff"] or 0) >= int(values["required_tech_staff"]),
+                            "client_value": values["client_tech_staff"], "required_value": values["required_tech_staff"]},
+        "ongoing_work": {"passed": values["max_ongoing_work_allowed"] is None or float(values["ongoing_work_value"] or 0) <= float(values["max_ongoing_work_allowed"]),
+                         "client_value": values["ongoing_work_value"], "maximum_allowed": values["max_ongoing_work_allowed"]},
+        "local_content": {"passed": local_class_ok, "client_value": values["local_content_class"],
+                          "required_value": values["required_local_content_class"]},
+    }
+    for kind, absent in missing_nodes.items():
+        gates[kind] = {"passed": not absent, "missing": absent}
+    failed = [name for name, gate in gates.items() if not gate["passed"]]
     return json.dumps({
         "success": True,
-        "client_id": row[0],
-        "client_name": row[1],
-        "turnover_coverage_pct": turnover_coverage_pct,
-        "is_eligible_solo": is_eligible_solo,
-        "is_blacklisted": bool(row[6]),
-        "is_msme": bool(row[5]),
-        "local_presence_gst_valid": bool(row[8]) if row[8] is not None else False,
-        "met_nodes": {
-            "categories": row[9] or [],
-            "brands": row[11] or [],
-            "certifications": row[13] or [],
-            "products": row[15] or [],
-        },
-        "unmet_nodes": {
-            "categories": unmet_cats,
-            "brands": unmet_brands,
-            "certifications": unmet_certs,
-            "products": unmet_prods,
-        },
-        "missing_requirements": missing_items,
+        "client_id": values["client_id"],
+        "client_name": values["client_name"],
+        "is_eligible_solo": not failed,
+        "turnover_coverage_pct": turnover_pct,
+        "gates": gates,
+        "met_nodes": {kind: [item for item in values[f"required_{kind}"] if item not in missing_nodes[kind]]
+                      for kind in missing_nodes},
+        "unmet_nodes": missing_nodes,
+        "missing_requirements": failed,
+        "evidence_source": "FalkorDB graph relationships and node properties",
     }, indent=2)
 
 
@@ -1898,11 +2040,9 @@ def find_peer_clients(
         match_score = float(r[4])
 
         plus_points = [
-            f"Technical Alignment: Capability profile mirrors {supporting_anchors} distinct historical contract winners in this department and category.",
-            "Local Regional Presence: Active in-state GSTIN registration with verified active tax compliance.",
-            "Financial Solvency: Validated working capital solvency buffer satisfying statutory threshold.",
-            "Make-in-India Preference: DPIIT Class-1 Local Content (>50%) grants statutory purchase preference.",
-            "MSME Policy Advantage: Eligible for statutory tender fee/EMD waiver and price preference."
+            f"Historical capability signal: {shared_caps_count} shared capability links across {supporting_anchors} qualifying winner anchors.",
+            "Tender alignment: peer has a matching work category and valid GST relationship for the tender region.",
+            "Privacy: historical anchor identities and past tender references are withheld from this result.",
         ]
 
         peers.append({

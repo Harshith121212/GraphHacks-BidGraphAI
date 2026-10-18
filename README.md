@@ -5,7 +5,7 @@
 [![MCP](https://img.shields.io/badge/Model_Context_Protocol-FastMCP-6366f1)](https://modelcontextprotocol.io/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-2.0.0-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![D3.js](https://img.shields.io/badge/D3.js-v7_Force_Directed-f59e0b?logo=d3.js&logoColor=white)](https://d3js.org/)
-[![Tests](https://img.shields.io/badge/Pytest-42%2F42_Passed-emerald?logo=pytest&logoColor=white)](./tests)
+[![Tests](https://img.shields.io/badge/Pytest-Test_Suite-emerald?logo=pytest&logoColor=white)](./tests)
 [![Architecture](https://img.shields.io/badge/Agent_Isolation-Zero_Driver_Imports-purple)](#strict-mcp-boundary--zero-driver-architecture)
 
 > **BidGraphAI** is an autonomous tender matching and consortium intelligence engine built for India's public procurement ecosystem (estimated at over ₹10 Lakh Crore across GeM and central portals).  
@@ -19,9 +19,9 @@ BidGraphAI is architected from the ground up to address all 3 tracks of the **Fa
 
 | Hackathon Track | How BidGraphAI Solves It with FalkorDB | Key Feature / Verification |
 | :--- | :--- | :--- |
-| **Track 1: Agents That Act on Connected Data** | Autonomous agent navigates multi-hop graph paths (`Client -> WorkCategory -> Brand -> Department -> Tender`) to evaluate eligibility, financial solvency, and territorial GST compliance via indexed graph traversals. Uses parameterized Cypher template tools with dynamic planning. | `get_tender_requirements`, `check_client_coverage`, `find_peer_clients`, `explore_paths`, and `discover_jv_consortium_matches`. |
-| **Track 2: Agent Memory and Coordination** | Persistent agent memory and dynamic feedback loop. When tenders are won or lost, the agent updates `[:DEPARTMENT_AFFINITY]` and `[:CATEGORY_AFFINITY]` edge weights in FalkorDB using Laplace-smoothed win rates. A 48-hour alert cooldown and terminal state protection prevent spam and duplicate alerting. | `record_bid_outcome_and_learn`, `record_jv_outcome_and_learn`, and 48-hour cooldown rule verified via `+48h Time Jump` simulator. |
-| **Track 3: Company Brain** | Graph-structured single source of truth connecting client financial balance sheets, OEM authorizations, BIS/ISO certifications, and CPWD enlistment grades. Synthesizes executive reasoning traces grounded in deterministic graph facts. | Interactive D3.js Force-Directed Graph Explorer, 5-stage JV decision tree, and Dual NVIDIA Nemotron 3.5 cognitive synthesizer. |
+| **Track 1: Agents That Act on Connected Data** | A deterministic LangGraph workflow invokes parameterized MCP tools that use FalkorDB traversals for eligibility, historical-winner lookalikes, and JV candidate synthesis. The orchestration order is configured in code; the language model may summarize returned graph evidence but does not dynamically plan the tool sequence. | `discover_direct_and_lookalike_matches`, `check_client_coverage`, `find_peer_clients`, `explore_paths`, and `discover_jv_consortium_matches`. |
+| **Track 2: Agent Memory and Coordination** | Outcome feedback persists on graph relationships and updates department/category affinity weights. This is application-level persistent state and feedback learning; it is not a full episodic conversation-memory system. | `record_bid_outcome_and_learn`, `record_jv_outcome_and_learn`, and the alert cooldown. |
+| **Track 3: Company Brain** | The demo connects contractor profiles to capabilities, registrations, outcomes, and tenders. It does not ingest a broad set of internal company documents, tickets, or team knowledge. | Contractor capability graph and the graph explorer. |
 
 ---
 
@@ -90,6 +90,117 @@ flowchart TD
     end
 ```
 
+## 🕸️ Graph Map: Where Match Decisions Come From
+
+FalkorDB is the source of tender requirements, contractor capabilities, regional eligibility, prior outcomes, and persisted consortium recommendations. The agent does not decide eligibility from a prompt alone: it asks the graph tools for connected evidence, applies the configured coverage and financial gates, then uses the language model to explain the result.
+
+```mermaid
+flowchart LR
+    T[(:Tender)]
+    C[(:Client)]
+    R[(:Region)]
+    D[(:Department)]
+    M[(:Ministry)]
+    WC[(:WorkCategory)]
+    S[(:Specialization)]
+    CERT[(:Certification)]
+    B[(:Brand)]
+    P[(:Product)]
+    E[(:EnlistmentClass)]
+    JV[(:JVConsortium)]
+    AD[(:AgentDecision)]
+
+    T -->|IN_CATEGORY| WC
+    T -->|REQUIRES_SPECIALIZATION| S
+    T -->|REQUIRES_CERT| CERT
+    T -->|PREFERS_BRAND| B
+    T -->|REQUIRES_PRODUCT| P
+    T -->|REQUIRES_ENLISTMENT| E
+    T -->|LOCATED_IN| R
+    D -->|ISSUED| T
+    M -->|HAS_DEPARTMENT| D
+
+    C -->|WORKS_IN| WC
+    C -->|HAS_SPECIALIZATION| S
+    C -->|HOLDS_CERT| CERT
+    C -->|AUTHORIZED_FOR| B
+    C -->|SUPPLIES| P
+    C -->|ENLISTED_AS| E
+    C -->|OPERATES_IN| R
+    C -->|BID_HISTORY / MATCHED_TENDER| T
+    C -->|DEPARTMENT_AFFINITY| D
+
+    C -->|LEAD_IN_CONSORTIUM / PARTNER_IN_CONSORTIUM| JV
+    JV -->|FORMED_FOR_TENDER| T
+    C -->|PARTNERSHIP_AFFINITY| C
+    AD -->|FOR_CLIENT| C
+    AD -->|EVALUATED_TENDER| T
+```
+
+### How the agent reads the graph
+
+1. `get_active_tenders_and_sync_status` reads active `Tender` nodes and their connected requirement and location nodes from FalkorDB.
+2. `get_tender_requirements` reads a tender's categories, specializations, certifications, strict brand requirements, products, enlistment classes, and financial thresholds.
+3. `discover_direct_and_lookalike_matches` traverses from the tender requirements to eligible clients. `check_client_coverage` returns the graph evidence behind a client's met and unmet requirements.
+4. `discover_jv_consortium_matches` reads clients operating in the tender's region, collects their graph-linked capabilities and qualifications, then checks client pairs. A pair is returned only if neither client qualifies alone, the combined financials pass, and the union of their linked capabilities covers the tender requirements.
+5. The workflow persists JV recommendations and agent decisions back to FalkorDB. The LLM produces the human-readable strategy from those returned records; it does not invent the underlying graph relationships or eligibility evidence.
+
+The core JV path looks like this: **Tender → required capability nodes ← Client A**, plus **Tender → other required capability nodes ← Client B**. FalkorDB supplies both connected evidence sets; the matcher checks their union and the combined financial gates.
+
+For a read-only view of the demo tender's graph requirements, use the graph explorer or MCP read-only Cypher tool:
+
+```cypher
+MATCH (t:Tender {id: 'RW/NH-12014/ 04/2025-MAH/ZONE-IV'})
+RETURN t.id AS tender_id,
+       t.expected_turnover_3yr AS required_turnover,
+       [(t)-[:LOCATED_IN]->(r:Region) | r.name] AS regions,
+       [(t)-[:IN_CATEGORY]->(n:WorkCategory) | n.name] AS categories,
+       [(t)-[:REQUIRES_SPECIALIZATION]->(n:Specialization) | n.name] AS specializations,
+       [(t)-[:REQUIRES_CERT]->(n:Certification) | n.name] AS certifications,
+       [(t)-[:REQUIRES_ENLISTMENT]->(n:EnlistmentClass) | n.code] AS enlistments,
+       [(t)-[e:PREFERS_BRAND]->(n:Brand) WHERE e.strict_auth_required = true | n.name] AS strict_brands
+```
+
+## 🎬 Demo: Show a Graph-Grounded JV Match
+
+The JV benchmark uses four explicitly synthetic clients: two civil profiles and two electrical profiles. Their graph links are complementary, and each civil–electrical pair clears the seeded tender's configured combined financial thresholds. These records are labeled `SYNTHETIC_DEMO`; their demo credentials and regional flags are not externally verified.
+
+Example evidence for **Northstar Civil Works + Voltcraft Power Systems**:
+
+| Evidence read from FalkorDB | Civil partner | Electrical partner | Combined / tender gate |
+| :--- | :--- | :--- | :--- |
+| Work category | Civil Works | Electrical | Both required categories covered |
+| Specialization | Civil Contractor | Wire Manufacturing Facility | Both required specializations covered |
+| Credentials | BIS IS-7098, CPWD, IS 1786; CPWD Class I | BIS IS-7098; Havells authorization | Required certification, enlistment, and strict brand authorization covered |
+| Average 3-year turnover | ₹15 Cr | ₹15 Cr | ₹30 Cr combined vs ₹28 Cr required |
+| Net worth | ₹2.5 Cr | ₹2.5 Cr | ₹5 Cr combined vs ₹3 Cr required |
+| Solvency | ₹3 Cr | ₹3 Cr | ₹6 Cr combined vs ₹4 Cr required |
+| Technical staff | 24 | 24 | 48 combined vs 10 required |
+| Ongoing work | ₹1 Cr | ₹1 Cr | ₹2 Cr combined vs ₹2.86 Cr maximum |
+
+The dashboard's JV decision tree is therefore explainable from specific graph edges and node properties: the civil node contributes civil credentials, the electrical node contributes electrical and brand coverage, and FalkorDB-backed matching verifies the financial and regional gates.
+
+### First-time local demo
+
+From the repository root, start FalkorDB and seed the benchmark graph using the [Quickstart](#-quickstart-guide). The seeder includes the four synthetic JV profiles and their tender requirement edges.
+
+### Existing persistent or deployed graph
+
+After deploying the updated code, run this additive backfill from a shell that has the same FalkorDB connection settings and graph name as the app:
+
+```bash
+python db/seed_graph.py --jv-demo-only
+```
+
+This upserts the JV demo profiles and graph relationships without clearing the graph or deleting learned outcomes. Then:
+
+1. Open the dashboard and click **Refresh Tenders**.
+2. Click **Run AI Tender Matching**.
+3. Open the JV Consortiums panel and select a result. The decision details show the client pair, combined financials, capability union, and regional gate.
+4. Use the graph explorer to follow the client-to-capability and tender-to-requirement edges shown in the graph map above.
+
+The seeded tender must still be active and before its deadline. If the JV count remains zero, inspect the MCP tool trace for `discover_jv_consortium_matches` and verify that the target tender is active, its requirement edges exist, and all four `client_demo_*` nodes appear in the selected FalkorDB graph.
+
 ---
 
 ## 🔒 Strict MCP Boundary & Zero-Driver Architecture
@@ -106,14 +217,16 @@ pytest -k test_phase4_preserves_strict_zero_driver_ast_isolation
 
 ---
 
-## 🧠 Parameterized Cypher Template Tools & Dynamic Planning
+## 🧠 Parameterized Cypher Tools & Deterministic Orchestration
 
 ### Why Parameterized Templates for Hackathon AI Agents?
 Rather than having an LLM invent unpredictable, unconstrained raw Cypher strings at runtime, BidGraphAI models graph queries as **hardcoded, parameterized Cypher templates exposed as discrete MCP tools**:
 1. **Submission Query Enumeration:** Hackathon judging requires an explicit, audited list of Cypher queries the product relies on.
-2. **Deterministic Explainability:** Every query execution is transparent, predictable, and 100% explainable.
-3. **Discrete MCP Tool Selection:** The agent acts as an autonomous planner: it inspects tender requirements, checks client coverage, and dynamically chooses which parameterized Cypher template tools to invoke, in what sequence, and with which parameters.
-4. **Safety & Zero-Hallucination:** Eliminates syntax errors, multi-tenant data leaks, write tampering, and unbounded traversal performance hazards in live demos.
+2. **Auditable decisions:** Matching and coverage results include returned capability evidence and heuristic score components.
+3. **Configured tool sequence:** The LangGraph workflow calls the registered MCP tools in a known sequence with conditional steps; an LLM does not choose the plan.
+4. **Controlled queries:** The core matching tools use parameterized Cypher templates. This reduces query-generation errors, but does not by itself guarantee zero hallucinations or eliminate every security risk.
+
+The displayed fit score is a deterministic heuristic ranking signal, not a calibrated probability of winning a tender. Contractor benchmark profiles and some enrichment fields are synthetic or inferred; verify eligibility against the source notice and current credentials.
 
 ### The 5 Core Parameterized Cypher Template Tools:
 
@@ -227,20 +340,19 @@ LIMIT 5
 
 ## 💡 Key Graph Traversals & Algorithmic Capabilities
 
-### 1. 5-Hop Lookalike Peer Discovery & Competitor Privacy Shield
-When a top-tier market competitor qualifies for a tender, BidGraphAI hops across connected capability nodes to alert structurally similar lookalike peers.
-**Competitor Privacy Shield:** In the dispatched alert for Peer B, Benchmark Anchor A's corporate identity, turnover, and proprietary contracts are **strictly redacted**, preserving competitive bid confidentiality while surfacing decisive winning plus points.
+### 1. Historical-Winner Lookalike Signal & Privacy Shield
+The query compares eligible clients' connected capability nodes with clients that won past tenders in the same department and category. The returned lookalike signal contains anchor counts and shared-capability counts; anchor identities and past tender IDs are withheld. It is a fit signal, not a win prediction.
 
 ### 2. Joint Venture (JV) Consortium Hub & 5-Stage Decision Tree
-If a tender requires multi-disciplinary capabilities (e.g. Civil + Electrical) or higher turnover than any single contractor holds, BidGraphAI forms complementary 60/40 consortia, evaluated across a 5-stage decision gate:
+If a tender requires multi-disciplinary capabilities (e.g. Civil + Electrical) or higher turnover than any single contractor holds, BidGraphAI forms complementary consortia and calculates lead/partner shares from their turnover. Each pair is evaluated across a 5-stage decision gate:
 - **Stage 1:** Solo Disqualification Gate
 - **Stage 2:** Financial Aggregation Gate (Combined turnover >= tender statutory threshold)
 - **Stage 3:** Capability Union Gate (Union covers 100% of categories, brands, certs)
-- **Stage 4:** Regional Compliance Gate (Active in-state GSTIN & zero blacklisting)
-- **Stage 5:** Governance Recommendation (Designated 60% Lead + 40% Consortium Partner)
+- **Stage 4:** Regional Compliance Gate (valid regional graph flag & no blacklist flag)
+- **Stage 5:** Governance Recommendation (lead and partner roles with calculated equity shares)
 
 ### 3. 48-Hour Alert Cooldown Enforcement
-Prevents alert spam by enforcing an atomic 172,800-second cooldown directly on `[:MATCHED_TENDER]` edges:
+Prevents repeat alerts by storing and checking a 172,800-second cooldown on `[:MATCHED_TENDER]` edges:
 ```cypher
 MATCH (c:Client {id: $client_id})-[r:MATCHED_TENDER]->(t:Tender {id: $tender_id})
 WHERE r.status IN ['WON', 'LOST']
@@ -289,7 +401,7 @@ Open **[http://localhost:8000](http://localhost:8000)**.
 
 ---
 
-## 🧪 Comprehensive Pytest Verification Suite (42/42 Passed)
+## 🧪 Comprehensive Pytest Verification Suite
 
 BidGraphAI includes complete automated verification across all 7 architectural test suites:
 

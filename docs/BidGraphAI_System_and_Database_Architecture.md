@@ -60,10 +60,10 @@ Where:
 * Matrix multiplication yields the multi-hop reachability graph $\mathbf{C}$ in $\mathcal{O}(k)$ time, utilizing hardware-accelerated SIMD instructions.
 
 ### 2.2 FalkorDB Architectural Characteristics in BidGraphAI
-1. **Sub-10ms Multi-Hop Execution**: Navigates 5-hop lookalike peer traversals and bipartite consortium matching across thousands of nodes in under 8 milliseconds.
+1. **Multi-Hop Traversal**: Uses native OpenCypher patterns for historical-winner lookalikes and capability-based consortium matching. Performance depends on graph size, indexes, and deployment latency; the application does not enforce an 8 ms service-level objective.
 2. **OpenCypher Compatibility**: Standardized declarative graph querying language supporting path expressions, node/edge pattern matching, aggregations, and variable-length traversals.
 3. **In-Memory Speed with Redis Protocol**: Low-latency binary wire protocol with background RDB snapshots and AOF persistence.
-4. **Dynamic Edge Property Mutation**: Supports atomic in-place updates of edge weights (`affinity_weight`, `win_rate`, `wins`, `cooldown_until`) enabling continuous reinforcement learning.
+4. **Outcome Feedback**: Writes win/loss counts and affinity properties to graph edges. The current feedback workflow uses multiple queries, so the full multi-edge learning update is not one atomic transaction.
 
 ---
 

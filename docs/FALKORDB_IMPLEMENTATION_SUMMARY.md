@@ -1,10 +1,10 @@
 # BidGraphAI: FalkorDB Implementation & Database Module Architecture
 
-**Document Version:** 2.0 (Verified)  
+**Document Version:** 2.1 (Source-aligned summary)
 **Author:** BidGraphAI Engineering Team  
 **Target Engine:** FalkorDB (GraphBLAS Sparse Matrix Linear Algebra)  
 **Protocol Layer:** Model Context Protocol (FastMCP)  
-**Test Suite Status:** 38 / 38 Tests Passing (100% Verified)  
+**Verification Status:** Source review and syntax checks performed for the latest implementation edits; the test suite was not run in this update.
 
 ---
 
@@ -16,7 +16,7 @@ At the core of BidGraphAI is **FalkorDB**, an in-memory graph database engine bu
 
 ### Architectural Highlights
 - **Strict Zero-Driver Protocol Isolation**: Neither the agent layer (`agent/`) nor the API orchestrator (`api/`) ever imports `falkordb` or database connection singletons directly. All graph interactions occur through the **Model Context Protocol (FastMCP)** over JSON-RPC stdio.
-- **Rule 12 openCypher Integrity**: Zero hardcoded constants or fake score decimals. All contractor match fits, consortium synergy scores, and partner capability unions are dynamically derived using multi-criteria gating, requirement coverage depth ratios, and Laplace-smoothed outcome counting.
+- **Explainable fit scoring**: Eligibility gates and match-fit score components are returned separately. The fit score is a deterministic heuristic, not a calibrated probability of winning.
 - **Competitor Privacy Shield**: A 5-hop graph lookalike algorithm that mines structural capability patterns from historical contract winners while strictly redacting competitor company names, past contract IDs, and raw financial benchmarks from client notifications.
 - **Cold-Start Memory Survivability**: Explicit state markers (`SystemMeta {key: 'scraper_status'}`) ensure that container restarts, deployments, and idle spin-downs on cloud hosting platforms never wipe contractor win/loss history or learned affinity weights.
 
@@ -85,13 +85,13 @@ The `db/` package is structured into three distinct submodules:
 ```
 db/
 ├── __init__.py        # Package exports exposing singleton accessors and schema initializers
-├── connection.py      # Thread-safe Singleton managing client lifecycle, TLS, and pooling
+├── connection.py      # Singleton-style cached client, lifecycle, TLS, and graph selection
 ├── schema.py          # 15 node property index specifications and idempotent creation
 └── seed_graph.py      # Tender ingestion, contractor roster, and cold-start memory preserver
 ```
 
 ### 4.1 `db/connection.py` — Connection Lifecycle & TLS Security
-- Implements a thread-safe **Singleton** pattern (`FalkorDBConnection`) ensuring a single client connection pool per process.
+- Implements a **Singleton-style client cache** (`FalkorDBConnection`). The current implementation does not lock first access, so concurrent initialization is not guaranteed thread-safe.
 - **Dual-Mode Configuration**:
   - URL-based: Parses `settings.FALKORDB_URL` (`falkor://user:pass@host:port`).
   - Parameter-based: Fallback to `FALKORDB_HOST`, `FALKORDB_PORT`, and `FALKORDB_PASSWORD`.

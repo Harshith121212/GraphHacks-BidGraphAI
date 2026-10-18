@@ -20,10 +20,201 @@ from pipeline.enricher_ingestor import EnricherIngestor
 logger = logging.getLogger(__name__)
 
 
+def seed_jv_demo_fixture(graph: Graph) -> None:
+    """Idempotently add the synthetic JV demo tender requirements and clients."""
+    graph.query("""
+    MERGE (:Region {name: 'Maharashtra', state_code: 'MH'})
+    MERGE (:Region {name: 'Karnataka', state_code: 'KA'})
+    MERGE (:WorkCategory {name: 'Civil Works'})
+    MERGE (:WorkCategory {name: 'Electrical'})
+    MERGE (:Specialization {name: 'Civil Contractor'})
+    MERGE (:Specialization {name: 'Wire Manufacturing Facility'})
+    MERGE (:EnlistmentClass {code: 'CPWD-CLASS-I-CIVIL'})
+    MERGE (:Certification {name: 'BIS IS-7098'})
+    MERGE (:Certification {name: 'CPWD'})
+    MERGE (:Certification {name: 'IS 1786'})
+    MERGE (:Brand {name: 'Havells'})
+    MERGE (:Product {name: 'LT/HT Armoured Cables'})
+    MERGE (:Product {name: 'PCC M20 foundation and plinth'})
+    MERGE (:Product {name: 'Reinforcement steel Fe500D'})
+    """)
+
+    graph.query("""
+    MATCH (t:Tender {id: 'RW/NH-12014/ 04/2025-MAH/ZONE-IV'})
+    SET t.expected_turnover_3yr = 280000000.0,
+        t.min_net_worth = 30000000.0,
+        t.min_solvency = 40000000.0,
+        t.min_tech_staff = 10,
+        t.min_local_content_class = 'CLASS-1',
+        t.max_ongoing_work_allowed = 28600000.0,
+        t.oem_required = false
+    WITH t
+    MATCH (wc_civ:WorkCategory {name: 'Civil Works'})
+    MATCH (wc_elec:WorkCategory {name: 'Electrical'})
+    MATCH (s_civ:Specialization {name: 'Civil Contractor'})
+    MATCH (s_wire:Specialization {name: 'Wire Manufacturing Facility'})
+    MATCH (ec_civ:EnlistmentClass {code: 'CPWD-CLASS-I-CIVIL'})
+    MATCH (b_hav:Brand {name: 'Havells'})
+    MATCH (p_cab:Product {name: 'LT/HT Armoured Cables'})
+    MATCH (p_pcc:Product {name: 'PCC M20 foundation and plinth'})
+    MATCH (p_steel:Product {name: 'Reinforcement steel Fe500D'})
+    MATCH (c_bis:Certification {name: 'BIS IS-7098'})
+    MATCH (c_cpwd:Certification {name: 'CPWD'})
+    MATCH (c_is1786:Certification {name: 'IS 1786'})
+    MERGE (t)-[:IN_CATEGORY]->(wc_civ)
+    MERGE (t)-[:IN_CATEGORY]->(wc_elec)
+    MERGE (t)-[:REQUIRES_SPECIALIZATION]->(s_civ)
+    MERGE (t)-[:REQUIRES_SPECIALIZATION]->(s_wire)
+    MERGE (t)-[:REQUIRES_ENLISTMENT]->(ec_civ)
+    MERGE (t)-[:PREFERS_BRAND {strict_auth_required: true}]->(b_hav)
+    MERGE (t)-[:REQUIRES_PRODUCT {quantity: 2000, unit: 'METERS', requires_oem_or_auth: false}]->(p_cab)
+    MERGE (t)-[:REQUIRES_PRODUCT {quantity: 1467, unit: 'Cum', requires_oem_or_auth: false}]->(p_pcc)
+    MERGE (t)-[:REQUIRES_PRODUCT {quantity: 110091, unit: 'Kg', requires_oem_or_auth: false}]->(p_steel)
+    MERGE (t)-[:REQUIRES_CERT]->(c_bis)
+    MERGE (t)-[:REQUIRES_CERT]->(c_cpwd)
+    MERGE (t)-[:REQUIRES_CERT]->(c_is1786)
+    """)
+
+    civil_profiles = [
+        {
+            "id": "client_demo_civil_northstar",
+            "name": "Northstar Civil Works (Synthetic Demo)",
+            "email": "northstar-demo@example.invalid",
+            "founded_date": "2018-04-12",
+            "legal_form": "PRIVATE_LIMITED",
+            "turnover_fy24": 135000000.0,
+            "turnover_fy25": 150000000.0,
+            "turnover_fy26": 165000000.0,
+            "avg_turnover_3yr": 150000000.0,
+            "net_worth": 25000000.0,
+            "solvency": 30000000.0,
+            "ongoing_work_value": 10000000.0,
+            "is_msme": True,
+            "is_startup": False,
+            "local_content_class": "CLASS-1",
+            "is_blacklisted": False,
+            "tech_staff_count": 24,
+            "portal_seller_id": "DEMO-NORTHSTAR-001",
+            "data_origin": "SYNTHETIC_DEMO",
+        },
+        {
+            "id": "client_demo_civil_riverstone",
+            "name": "Riverstone Infrastructure (Synthetic Demo)",
+            "email": "riverstone-demo@example.invalid",
+            "founded_date": "2017-09-03",
+            "legal_form": "PRIVATE_LIMITED",
+            "turnover_fy24": 145000000.0,
+            "turnover_fy25": 155000000.0,
+            "turnover_fy26": 165000000.0,
+            "avg_turnover_3yr": 155000000.0,
+            "net_worth": 27000000.0,
+            "solvency": 32000000.0,
+            "ongoing_work_value": 12000000.0,
+            "is_msme": False,
+            "is_startup": False,
+            "local_content_class": "CLASS-1",
+            "is_blacklisted": False,
+            "tech_staff_count": 27,
+            "portal_seller_id": "DEMO-RIVERSTONE-002",
+            "data_origin": "SYNTHETIC_DEMO",
+        },
+    ]
+    for profile in civil_profiles:
+        graph.query("""
+        MATCH (wc:WorkCategory {name: 'Civil Works'})
+        MATCH (spec:Specialization {name: 'Civil Contractor'})
+        MATCH (enlist:EnlistmentClass {code: 'CPWD-CLASS-I-CIVIL'})
+        MATCH (bis:Certification {name: 'BIS IS-7098'})
+        MATCH (cpwd:Certification {name: 'CPWD'})
+        MATCH (is1786:Certification {name: 'IS 1786'})
+        MERGE (c:Client {id: $client_id})
+        SET c += $profile
+        MERGE (c)-[:WORKS_IN]->(wc)
+        MERGE (c)-[:HAS_SPECIALIZATION]->(spec)
+        MERGE (c)-[:HOLDS_CERT {valid_until: 1893456000}]->(bis)
+        MERGE (c)-[:HOLDS_CERT {valid_until: 1893456000}]->(cpwd)
+        MERGE (c)-[:HOLDS_CERT {valid_until: 1893456000}]->(is1786)
+        MERGE (c)-[:ENLISTED_AS {grade: 'Class I', valid_until: 1893456000}]->(enlist)
+        """, {"client_id": profile["id"], "profile": profile})
+
+    electrical_profiles = [
+        {
+            "id": "client_demo_electrical_voltcraft",
+            "name": "Voltcraft Power Systems (Synthetic Demo)",
+            "email": "voltcraft-demo@example.invalid",
+            "founded_date": "2019-02-18",
+            "legal_form": "PRIVATE_LIMITED",
+            "turnover_fy24": 135000000.0,
+            "turnover_fy25": 150000000.0,
+            "turnover_fy26": 165000000.0,
+            "avg_turnover_3yr": 150000000.0,
+            "net_worth": 25000000.0,
+            "solvency": 30000000.0,
+            "ongoing_work_value": 10000000.0,
+            "is_msme": True,
+            "is_startup": False,
+            "local_content_class": "CLASS-1",
+            "is_blacklisted": False,
+            "tech_staff_count": 24,
+            "portal_seller_id": "DEMO-VOLTCRAFT-003",
+            "data_origin": "SYNTHETIC_DEMO",
+        },
+        {
+            "id": "client_demo_electrical_sparkline",
+            "name": "Sparkline Electrical Manufacturing (Synthetic Demo)",
+            "email": "sparkline-demo@example.invalid",
+            "founded_date": "2016-11-07",
+            "legal_form": "PRIVATE_LIMITED",
+            "turnover_fy24": 145000000.0,
+            "turnover_fy25": 155000000.0,
+            "turnover_fy26": 165000000.0,
+            "avg_turnover_3yr": 155000000.0,
+            "net_worth": 27000000.0,
+            "solvency": 32000000.0,
+            "ongoing_work_value": 12000000.0,
+            "is_msme": False,
+            "is_startup": False,
+            "local_content_class": "CLASS-1",
+            "is_blacklisted": False,
+            "tech_staff_count": 27,
+            "portal_seller_id": "DEMO-SPARKLINE-004",
+            "data_origin": "SYNTHETIC_DEMO",
+        },
+    ]
+    for profile in electrical_profiles:
+        graph.query("""
+        MATCH (wc:WorkCategory {name: 'Electrical'})
+        MATCH (spec:Specialization {name: 'Wire Manufacturing Facility'})
+        MATCH (bis:Certification {name: 'BIS IS-7098'})
+        MATCH (brand:Brand {name: 'Havells'})
+        MATCH (cable:Product {name: 'LT/HT Armoured Cables'})
+        MERGE (c:Client {id: $client_id})
+        SET c += $profile
+        MERGE (c)-[:WORKS_IN]->(wc)
+        MERGE (c)-[:HAS_SPECIALIZATION]->(spec)
+        MERGE (c)-[:HOLDS_CERT {valid_until: 1893456000}]->(bis)
+        MERGE (c)-[:AUTHORIZED_FOR {role: 'Authorized Vendor', territory: 'All India', valid_until: 1893456000}]->(brand)
+        MERGE (c)-[:SUPPLIES {is_oem: false, facility_name: 'Synthetic Demo Cable Unit', monthly_capacity: 30000}]->(cable)
+        """, {"client_id": profile["id"], "profile": profile})
+
+    graph.query("""
+    MATCH (c:Client)
+    WHERE c.id IN [
+      'client_demo_civil_northstar', 'client_demo_civil_riverstone',
+      'client_demo_electrical_voltcraft', 'client_demo_electrical_sparkline'
+    ]
+    UNWIND ['Maharashtra', 'Karnataka', 'Delhi', 'Uttar Pradesh', 'Assam',
+            'West Bengal', 'Tamil Nadu', 'Gujarat', 'Rajasthan', 'Himachal Pradesh',
+            'Madhya Pradesh', 'Uttarakhand'] AS region_name
+    MERGE (r:Region {name: region_name})
+    MERGE (c)-[:OPERATES_IN {gst_valid: true, filing_status: 'ACTIVE'}]->(r)
+    """)
+
+
 def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True) -> Dict[str, Any]:
     """
     Populates FalkorDB with real Indian government procurement tenders (scraped from GeM & CPPP)
-    and an expanded roster of 12 diverse Indian contractor clients covering:
+    and an expanded roster of 16 diverse Indian contractor clients covering:
     Electrical EPC, Heavy Civil, Road Construction, IT Hardware, HVAC, Furniture, Healthcare,
     and MSME Manufacturing.
     """
@@ -34,10 +225,11 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
         try:
             check_res = graph.query("MATCH (sm:SystemMeta {key: 'scraper_status'}) RETURN sm.total_tenders_ingested").result_set
             if check_res and len(check_res) > 0:
+                seed_jv_demo_fixture(graph)
                 logger.info("SystemMeta marker found in FalkorDB; graph already initialized. Preserving memory across cold start.")
                 return {
-                    "status": "preserved",
-                    "message": "Graph already initialized. Persistent Won/Lost memory and affinity weights preserved.",
+                    "status": "preserved_with_demo_fixture",
+                    "message": "Existing graph and learned memory preserved; synthetic JV demo profiles and requirements upserted.",
                     "total_tenders": check_res[0][0] if check_res[0] else 26,
                 }
         except Exception as exc:
@@ -854,6 +1046,9 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     MERGE (c_defaulter)-[:OPERATES_IN {gstin: '29EEEEE4444E1Z9', gst_valid: true, filing_status: 'ACTIVE'}]->(r_kar)
     """)
 
+    # Add complementary demo clients and the requirements they jointly satisfy.
+    seed_jv_demo_fixture(graph)
+
     # Multi-State National Operating Presence for legitimate non-blacklisted contractors
     graph.query("""
     MATCH (c:Client)
@@ -862,6 +1057,7 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
     WHERE r.name IN ['Karnataka', 'Maharashtra', 'Delhi', 'Uttar Pradesh', 'Assam', 'West Bengal', 'Tamil Nadu', 'Gujarat', 'Rajasthan', 'Himachal Pradesh', 'Madhya Pradesh', 'Uttarakhand']
     MERGE (c)-[:OPERATES_IN {gst_valid: true, filing_status: 'ACTIVE'}]->(r)
     """)
+
 
     # Seed Initial Demo JV Consortium and Dispatched Alerts
     initial_jv_tree = {
@@ -895,11 +1091,11 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
         "stage4_regional_compliance": {
             "title": "Stage 4: Regional Registration & Compliance Gate",
             "region": "Maharashtra",
-            "lead_gst": "Active GSTIN verified in Maharashtra (27KKKKK8888K1Z5)",
-            "partner_gst": "Active GSTIN verified in Maharashtra (27SSSSS1111S1Z4)",
-            "blacklisting_status": "Passed (Zero debarment flags across both entities)",
+            "lead_gst": "Synthetic demo profile records a valid GST relationship in Maharashtra",
+            "partner_gst": "Synthetic demo profile records a valid GST relationship in Maharashtra",
+            "blacklisting_status": "Both synthetic client nodes have is_blacklisted=false",
             "gate_passed": True,
-            "detail": "Both consortium members hold verified GSTINs and zero blacklisting records."
+            "detail": "Demo graph flags pass the configured regional and blacklist gates; these values are not externally verified."
         },
         "stage5_governance_recommendation": {
             "title": "Stage 5: Consortium Governance & Lead Designation",
@@ -1048,6 +1244,13 @@ def seed_database(graph_name: Optional[str] = None, clear_existing: bool = True)
 
 
 if __name__ == "__main__":
-    force_clear = os.environ.get("FORCE_RESET", "false").lower() == "true" or "--force" in sys.argv
-    result = seed_database(clear_existing=force_clear)
+    if "--jv-demo-only" in sys.argv:
+        # Safe additive backfill for an already initialized graph. This path
+        # never clears the graph or changes learned bid history.
+        demo_graph = get_graph()
+        seed_jv_demo_fixture(demo_graph)
+        result = {"status": "success", "message": "Synthetic JV demo fixture upserted without clearing the graph."}
+    else:
+        force_clear = os.environ.get("FORCE_RESET", "false").lower() == "true" or "--force" in sys.argv
+        result = seed_database(clear_existing=force_clear)
     print("Seed complete:", result)

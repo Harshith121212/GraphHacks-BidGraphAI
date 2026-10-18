@@ -1,0 +1,16 @@
+MATCH (t:Tender {id: 'RW/NH-12014/ 04/2025-MAH/ZONE-IV'})-[tr]->(req)
+MATCH (c:Client)-[cr]->(req)
+WHERE c.id IN [
+  'client_demo_civil_northstar',
+  'client_demo_electrical_voltcraft'
+]
+  AND type(tr) IN [
+    'IN_CATEGORY', 'REQUIRES_SPECIALIZATION', 'REQUIRES_CERT',
+    'PREFERS_BRAND', 'REQUIRES_ENLISTMENT', 'REQUIRES_PRODUCT'
+  ]
+  AND type(cr) IN [
+    'WORKS_IN', 'HAS_SPECIALIZATION', 'HOLDS_CERT',
+    'AUTHORIZED_FOR', 'ENLISTED_AS', 'SUPPLIES'
+  ]
+RETURN t, tr, req, cr, c
+LIMIT 50

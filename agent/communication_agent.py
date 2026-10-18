@@ -98,11 +98,9 @@ class CommunicationAgent:
 
         if "LOOKALIKE" in mt or "HOP" in mt or "PEER" in mt:
             return (
-                f"{client_name} was chosen through BidGraphAI's 5-hop lookalike capability analysis. "
-                f"Our multi-layer graph engine mapped your verified manufacturing specifications, statutory certifications, "
-                f"and technical capabilities against historical successful contractor benchmarks in {dept}. "
-                f"This structural capability equivalence establishes a high projected win probability without disclosing "
-                f"proprietary peer identities."
+                f"{client_name} matched a graph-derived capability pattern associated with prior awarded work in {dept}. "
+                f"The matching score is a heuristic fit measure, not a prediction of award. "
+                f"Historical anchor identities and tender references are withheld."
             )
         elif "JV" in mt or "CONSORTIUM" in mt:
             return (
@@ -112,9 +110,8 @@ class CommunicationAgent:
             )
         else:
             return (
-                f"{client_name} was chosen via Direct Requirement Matching. Your registered statutory enlistments, "
-                f"active regional GSTIN, and annual turnover liquidity directly satisfy 100% of the mandatory "
-                f"procurement criteria published by {dept}."
+                f"{client_name} passed BidGraphAI's configured graph-based eligibility filters for the opportunity "
+                f"published by {dept}. Review the source tender and underlying credentials before bidding."
             )
 
     def _extract_plus_points_from_trace(self, reasoning_trace: str, client_data: Dict[str, Any]) -> List[str]:
@@ -137,13 +134,13 @@ class CommunicationAgent:
             certs = client_data.get("certifications", [])
             brands = client_data.get("brands", [])
 
-            points.append(f"Financial Liquidity: 3-Year average turnover of ₹{turnover_cr:.2f} Cr comfortably satisfies statutory tender threshold.")
+            points.append(f"Recorded 3-year average turnover in the demo graph: ₹{turnover_cr:.2f} Cr.")
             if certs:
-                points.append(f"Accredited Quality Standards: Holds verified certifications including {', '.join(certs)}.")
+                points.append(f"Certification nodes listed in the demo graph: {', '.join(certs)}; confirm validity against source documents.")
             if brands:
-                points.append(f"OEM Catalog Alignment [Demo Benchmark]: Synthetic authorization credentials for demo brands ({', '.join(brands)}).")
+                points.append(f"Brand nodes listed in the demo graph: {', '.join(brands)}; verify current authorization and territory.")
             if is_msme:
-                points.append("Public Procurement Policy (MSE): Qualified for statutory EMD exemption and purchase preference.")
+                points.append("The demo graph marks this client as an MSME; check the tender notice for applicable benefits.")
 
         return points[:5]
 
@@ -198,7 +195,7 @@ class CommunicationAgent:
             f"- Tender Name: {tender_title}\n"
             f"- Tender Reference ID: {tender_id}\n"
             f"- Scope of Work: {scope_of_work}\n"
-            f"- Projected Match Fit Score: {score_pct}%\n"
+            f"- Deterministic heuristic fit score (not a probability of winning): {score_pct}%\n"
             f"- Estimated Tender Value: {tender_val_str}\n"
             f"- Tender Submission End Date: {tender_end_date}\n"
             f"- Department / Procuring Entity: {department}\n"
@@ -213,11 +210,11 @@ class CommunicationAgent:
             f"Dear Executive Leadership at {client_name},\n"
             f"1. TENDER OVERVIEW\n"
             f"2. COMMERCIAL & SUBMISSION DETAILS\n"
-            f"3. DECISIVE WINNING PLUS POINTS\n"
+            f"3. GRAPH-RECORDED MATCH EVIDENCE\n"
             f"4. REASON WHY YOU WERE CHOSEN FOR THIS TENDER\n"
             f"5. RECOMMENDED NEXT STEPS & ACTION PLAN\n"
             f"Warm regards,\n"
-            f"BidGraphAI Autonomous Procurement Intelligence Agent"
+            f"BidGraphAI Procurement Intelligence Agent"
         )
 
         try:
@@ -346,7 +343,7 @@ Subject: {subject}
 
 Dear Executive Leadership & Bidding Team at {client_name},
 
-Our autonomous procurement intelligence engine has flagged a high-conviction tender opportunity matching your corporate capabilities and statutory profile.
+BidGraphAI found a graph-based capability and eligibility fit for this tender. The fit score is a heuristic ranking signal, not a prediction of award.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 1. TENDER OVERVIEW
@@ -355,7 +352,7 @@ Our autonomous procurement intelligence engine has flagged a high-conviction ten
 • Reference ID: {tender_id}
 • Procuring Department: {tender_info.get('department', 'Procurement Authority')} ({tender_info.get('ministry', 'Govt of India')})
 • Scope of Work: {scope_of_work}
-• AI Fit Score: {score_pct}% Match (High Projected Win Probability)
+• Heuristic Fit Score: {score_pct}% (not a win probability)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 2. COMMERCIAL & SUBMISSION DETAILS
@@ -367,7 +364,7 @@ Our autonomous procurement intelligence engine has flagged a high-conviction ten
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 3. DECISIVE WINNING PLUS POINTS POSSESSED BY {client_name.upper()}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Your firm maintains key structural and statutory advantages that position you ahead of competing bidders for this tender:
+The following graph evidence contributed to the match. Confirm each item against the tender notice and your current records before bidding:
 {plus_points_text}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -412,7 +409,7 @@ Email: {client_email}
               <tr><td style="color: #94a3b8; padding: 4px 0;">Estimated Value:</td><td style="color: #34d399; font-weight: 700; font-size: 14px;">{tender_val_str}</td></tr>
               <tr><td style="color: #94a3b8; padding: 4px 0;">Submission End Date:</td><td style="color: #f59e0b; font-weight: 700;">{tender_end_date}</td></tr>
               <tr><td style="color: #94a3b8; padding: 4px 0;">Scope of Work:</td><td style="color: #e2e8f0;">{scope_of_work}</td></tr>
-              <tr><td style="color: #94a3b8; padding: 4px 0;">AI Fit Score:</td><td style="color: #6366f1; font-weight: 700;">{score_pct}% Match</td></tr>
+              <tr><td style="color: #94a3b8; padding: 4px 0;">Heuristic Fit Score:</td><td style="color: #6366f1; font-weight: 700;">{score_pct}% (not a win probability)</td></tr>
             </table>
           </div>
 

@@ -58,7 +58,7 @@ def test_schema_and_seeding():
 
     assert min_count >= 3, f"Expected at least 3 Ministries, got {min_count}"
     assert dept_count >= 4, f"Expected at least 4 Departments, got {dept_count}"
-    assert client_count == 12, f"Expected 12 Clients, got {client_count}"
+    assert client_count >= 16, f"Expected at least 16 Clients including synthetic JV demo profiles, got {client_count}"
     assert tender_count >= 26, f"Expected at least 26 Tenders, got {tender_count}"
     assert brand_count >= 4, f"Expected at least 4 Brands, got {brand_count}"
     assert prod_count >= 4, f"Expected at least 4 Products, got {prod_count}"
